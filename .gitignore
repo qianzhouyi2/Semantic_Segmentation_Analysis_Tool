@@ -1,0 +1,25 @@
+# Model checkpoints
+models/*.pth
+models/*.pt
+models/*.ckpt
+!models/README.md
+
+# Local data links
+datasets
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Notebook
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.codex
