@@ -1,0 +1,8 @@
+report_name: robustness_eval
+clean_summary: results/reports/evaluation/clean/summary.json
+adv_summary: results/reports/evaluation/adv/summary.json
+output_dir: results/reports/robustness
+metrics:
+  - pixel_accuracy
+  - mean_iou
+  - mean_dice

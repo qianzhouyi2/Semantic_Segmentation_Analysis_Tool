@@ -1,0 +1,6 @@
+title: Semantic Segmentation Analysis Report
+sections:
+  - dataset_summary
+  - class_distribution
+  - evaluation_summary
+  - qualitative_examples

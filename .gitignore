@@ -23,3 +23,13 @@ venv/
 .idea/
 .vscode/
 .codex
+
+# Generated analysis outputs
+results/cache/*
+results/figures/*
+results/tables/*
+results/reports/*
+!results/cache/.gitkeep
+!results/figures/.gitkeep
+!results/tables/.gitkeep
+!results/reports/.gitkeep

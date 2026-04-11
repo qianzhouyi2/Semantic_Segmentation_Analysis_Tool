@@ -1,0 +1,41 @@
+# Semantic Segmentation Analysis Tool
+# Recommended Python version: 3.11
+#
+# CUDA-enabled PyTorch build (default: CUDA 12.1 for broader compatibility).
+# If your target machine uses a newer NVIDIA driver, this can be switched to a
+# newer official wheel index such as cu126 or cu128.
+#
+# Official reference:
+# https://pytorch.org/get-started/previous-versions/
+
+--index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://pypi.org/simple
+
+# Deep learning
+torch==2.4.1
+torchvision==0.19.1
+torchaudio==2.4.1
+timm==1.0.26
+einops==0.8.2
+
+# Core data stack
+numpy>=1.26,<3.0
+pandas>=2.2,<3.0
+scipy>=1.12,<2.0
+pyyaml>=6.0,<7.0
+tqdm>=4.66,<5.0
+rich>=13.7,<14.0
+
+# Image processing
+opencv-python>=4.10,<5.0
+Pillow>=10.2,<12.0
+scikit-image>=0.22,<1.0
+
+# Visualization and analysis
+matplotlib>=3.8,<4.0
+seaborn>=0.13,<1.0
+plotly>=5.20,<6.0
+scikit-learn>=1.4,<2.0
+
+# Lightweight app / reporting
+streamlit>=1.33,<2.0

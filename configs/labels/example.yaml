@@ -1,0 +1,10 @@
+ignore_index: 255
+background_ids:
+  - 0
+classes:
+  - id: 0
+    name: background
+    color: [0, 0, 0]
+  - id: 1
+    name: foreground
+    color: [0, 255, 0]
