@@ -4,30 +4,18 @@ import torch
 
 from src.attacks.base import AttackOutput, SegmentationAttack
 from src.attacks.constraints import project_linf
-from src.attacks.losses import segmentation_attack_loss
+from src.attacks.losses import build_safe_targets, build_valid_mask, sample_alternate_labels
 
 
-class PGDAttack(SegmentationAttack):
-    """Multi-step Linf PGD for dense segmentation models."""
+class DAGAttack(SegmentationAttack):
+    """Dense Adversary Generation adapted to the current segmentation pipeline."""
 
-    attack_name = "pgd"
-
-    def compute_attack_loss(
-        self,
-        logits: torch.Tensor,
-        targets: torch.Tensor,
-        step_index: int,
-        total_steps: int,
-    ) -> torch.Tensor:
-        del step_index, total_steps
-        return segmentation_attack_loss(
-            logits=logits,
-            targets=targets,
-            loss_name=self.config.loss_name,
-            ignore_index=self.config.ignore_index,
-        )
+    attack_name = "dag"
 
     def run(self, images: torch.Tensor, targets: torch.Tensor) -> AttackOutput:
+        if self.config.targeted:
+            raise NotImplementedError("DAG targeted mode is not supported in this pipeline.")
+
         epsilon = self.config.epsilon
         step_size = self.config.resolved_step_size()
         steps = self.config.steps
@@ -35,7 +23,6 @@ class PGDAttack(SegmentationAttack):
         clean = images.detach().clone().to(self.model.device)
         labels = targets.detach().clone().to(self.model.device)
         adversarial = clean.clone()
-
         if self.config.random_start:
             adversarial = clean + torch.empty_like(clean).uniform_(-epsilon, epsilon)
             adversarial = project_linf(
@@ -46,20 +33,34 @@ class PGDAttack(SegmentationAttack):
                 max_value=self.config.clamp_max,
             )
 
+        num_classes = self.model.num_classes
+        target_labels = sample_alternate_labels(
+            targets=labels,
+            num_classes=num_classes,
+            ignore_index=self.config.ignore_index,
+        )
+        valid_mask = build_valid_mask(targets=labels, num_classes=num_classes, ignore_index=self.config.ignore_index)
+        safe_targets = build_safe_targets(targets=labels, valid_mask=valid_mask)
+        safe_target_labels = torch.where(valid_mask, target_labels, torch.zeros_like(target_labels))
+
+        active_pixels = int(valid_mask.sum().detach().cpu().item())
         loss_value = 0.0
-        direction = -1.0 if self.config.targeted else 1.0
         with torch.enable_grad():
-            for step_index in range(steps):
+            for _ in range(steps):
                 adversarial = adversarial.detach().requires_grad_(True)
                 logits = self.model.logits(adversarial)
-                loss = self.compute_attack_loss(
-                    logits=logits,
-                    targets=labels,
-                    step_index=step_index,
-                    total_steps=steps,
-                )
-                objective = direction * loss
-                gradient = torch.autograd.grad(objective, adversarial, retain_graph=False, create_graph=False)[0]
+                predictions = logits.argmax(dim=1)
+                active_mask = valid_mask & (predictions == safe_targets)
+                active_pixels = int(active_mask.sum().detach().cpu().item())
+                if active_pixels == 0:
+                    adversarial = adversarial.detach()
+                    break
+
+                true_logits = logits.gather(1, safe_targets.unsqueeze(1)).squeeze(1)
+                target_logits = logits.gather(1, safe_target_labels.unsqueeze(1)).squeeze(1)
+                objective_map = active_mask.float().detach() * (target_logits - true_logits)
+                loss = objective_map.sum() / active_mask.float().sum().clamp_min(1.0)
+                gradient = torch.autograd.grad(loss, adversarial, retain_graph=False, create_graph=False)[0]
                 adversarial = adversarial.detach() + step_size * gradient.sign()
                 adversarial = project_linf(
                     adversarial_images=adversarial,
@@ -78,8 +79,9 @@ class PGDAttack(SegmentationAttack):
                 "attack": self.attack_name,
                 "steps": steps,
                 "step_size": step_size,
+                "epsilon": epsilon,
                 "loss": loss_value,
+                "active_pixels": active_pixels,
                 "random_start": self.config.random_start,
-                "targeted": self.config.targeted,
             },
         )
