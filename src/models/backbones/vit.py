@@ -196,45 +196,7 @@ class VisionTransformer(nn.Module):
     def no_weight_decay(self) -> set[str]:
         return {"pos_embed", "cls_token", "dist_token"}
 
-    def forward(self, x: torch.Tensor, pre_neck: bool = False) -> torch.Tensor:
-        batch_size, _, height, width = x.shape
-        patch_size = self.patch_size
-        x = self.patch_embed(x)
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
-        if self.distilled:
-            dist_tokens = self.dist_token.expand(batch_size, -1, -1)
-            x = torch.cat((cls_tokens, dist_tokens, x), dim=1)
-        else:
-            x = torch.cat((cls_tokens, x), dim=1)
-
-        pos_embed = self.pos_embed
-        num_extra_tokens = 1 + int(self.distilled)
-        if x.shape[1] != pos_embed.shape[1]:
-            pos_embed = resize_pos_embed(
-                pos_embed,
-                self.patch_embed.grid_size,
-                (height // patch_size, width // patch_size),
-                num_extra_tokens,
-            )
-        x = self.dropout(x + pos_embed)
-
-        for block in self.blocks:
-            x = block(x)
-        x = self.norm(x)
-
-        if pre_neck:
-            return x
-
-        if self.distilled:
-            x_token, x_dist = x[:, 0], x[:, 1]
-            return (self.head(x_token) + self.head_dist(x_dist)) / 2
-
-        return self.head(x[:, 0])
-
-    def get_attention_map(self, x: torch.Tensor, layer_id: int) -> torch.Tensor:
-        if layer_id >= self.n_layers or layer_id < 0:
-            raise ValueError(f"Invalid layer_id={layer_id}; expected 0 <= layer_id < {self.n_layers}.")
-
+    def _prepare_tokens(self, x: torch.Tensor, apply_dropout: bool = True) -> torch.Tensor:
         batch_size, _, height, width = x.shape
         patch_size = self.patch_size
         x = self.patch_embed(x)
@@ -255,6 +217,42 @@ class VisionTransformer(nn.Module):
                 num_extra_tokens,
             )
         x = x + pos_embed
+        if apply_dropout:
+            x = self.dropout(x)
+        return x
+
+    def forward_tokens(
+        self,
+        x: torch.Tensor,
+        collect_hidden_states: bool = False,
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        x = self._prepare_tokens(x)
+        hidden_states: list[torch.Tensor] = []
+
+        for block in self.blocks:
+            x = block(x)
+            if collect_hidden_states:
+                hidden_states.append(x)
+        x = self.norm(x)
+        return x, hidden_states
+
+    def forward(self, x: torch.Tensor, pre_neck: bool = False) -> torch.Tensor:
+        x, _ = self.forward_tokens(x, collect_hidden_states=False)
+
+        if pre_neck:
+            return x
+
+        if self.distilled:
+            x_token, x_dist = x[:, 0], x[:, 1]
+            return (self.head(x_token) + self.head_dist(x_dist)) / 2
+
+        return self.head(x[:, 0])
+
+    def get_attention_map(self, x: torch.Tensor, layer_id: int) -> torch.Tensor:
+        if layer_id >= self.n_layers or layer_id < 0:
+            raise ValueError(f"Invalid layer_id={layer_id}; expected 0 <= layer_id < {self.n_layers}.")
+
+        x = self._prepare_tokens(x, apply_dropout=False)
 
         for block_idx, block in enumerate(self.blocks):
             if block_idx < layer_id:

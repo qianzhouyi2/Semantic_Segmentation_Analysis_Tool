@@ -1,0 +1,67 @@
+ignore_index: 255
+background_ids:
+  - 0
+classes:
+  - id: 0
+    name: background
+    color: [0, 0, 0]
+  - id: 1
+    name: airplane
+    color: [128, 0, 0]
+  - id: 2
+    name: bicycle
+    color: [0, 128, 0]
+  - id: 3
+    name: bird
+    color: [128, 128, 0]
+  - id: 4
+    name: boat
+    color: [0, 0, 128]
+  - id: 5
+    name: bottle
+    color: [128, 0, 128]
+  - id: 6
+    name: bus
+    color: [0, 128, 128]
+  - id: 7
+    name: car
+    color: [128, 128, 128]
+  - id: 8
+    name: cat
+    color: [64, 0, 0]
+  - id: 9
+    name: chair
+    color: [192, 0, 0]
+  - id: 10
+    name: cow
+    color: [64, 128, 0]
+  - id: 11
+    name: diningtable
+    color: [192, 128, 0]
+  - id: 12
+    name: dog
+    color: [64, 0, 128]
+  - id: 13
+    name: horse
+    color: [192, 0, 128]
+  - id: 14
+    name: motorcycle
+    color: [64, 128, 128]
+  - id: 15
+    name: person
+    color: [192, 128, 128]
+  - id: 16
+    name: potted-plant
+    color: [0, 64, 0]
+  - id: 17
+    name: sheep
+    color: [128, 64, 0]
+  - id: 18
+    name: sofa
+    color: [0, 192, 0]
+  - id: 19
+    name: train
+    color: [128, 192, 0]
+  - id: 20
+    name: tv
+    color: [0, 64, 128]

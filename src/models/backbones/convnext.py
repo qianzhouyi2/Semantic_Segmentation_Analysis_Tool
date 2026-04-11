@@ -132,14 +132,27 @@ class ConvNeXt(nn.Module):
             if module.bias is not None:
                 nn.init.constant_(module.bias, 0)
 
-    def forward_features(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    def forward_features(
+        self,
+        x: torch.Tensor,
+        collect_intermediates: bool = False,
+    ) -> tuple[torch.Tensor, ...] | tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
         outputs: list[torch.Tensor] = []
+        intermediates: dict[str, torch.Tensor] = {}
         for stage_idx in range(4):
             x = self.downsample_layers[stage_idx](x)
-            x = self.stages[stage_idx](x)
+            norm_layer = getattr(self, f"norm{stage_idx}")
+            for block_idx, block in enumerate(self.stages[stage_idx]):
+                x = block(x)
+                if collect_intermediates:
+                    intermediates[f"backbone:stage{stage_idx}:block{block_idx:02d}"] = norm_layer(x)
             if stage_idx in self.out_indices:
-                norm_layer = getattr(self, f"norm{stage_idx}")
-                outputs.append(norm_layer(x))
+                normalized = norm_layer(x)
+                outputs.append(normalized)
+                if collect_intermediates:
+                    intermediates[f"backbone:stage{stage_idx}"] = normalized
+        if collect_intermediates:
+            return tuple(outputs), intermediates
         return tuple(outputs)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:

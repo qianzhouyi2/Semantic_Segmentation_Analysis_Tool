@@ -44,6 +44,26 @@ class AttackConfigTest(unittest.TestCase):
         self.assertEqual(config.steps, 4)
         self.assertEqual(config.extra["custom_flag"], True)
 
+    def test_scaled_multiplies_budget_and_preserves_original_values_in_extra(self) -> None:
+        config = AttackConfig(name="fgsm", epsilon=0.1, step_size=0.02, steps=1)
+
+        scaled = config.scaled(1.5)
+
+        self.assertAlmostEqual(scaled.epsilon, 0.15)
+        self.assertAlmostEqual(scaled.step_size or 0.0, 0.03)
+        self.assertAlmostEqual(float(scaled.extra["base_epsilon"]), 0.1)
+        self.assertAlmostEqual(float(scaled.extra["base_step_size"]), 0.02)
+        self.assertAlmostEqual(float(scaled.extra["epsilon_scale"]), 1.5)
+
+    def test_with_radius_255_sets_absolute_budget(self) -> None:
+        config = AttackConfig(name="pgd", epsilon=8.0 / 255.0, step_size=2.0 / 255.0, steps=4)
+
+        adjusted = config.with_radius_255(4)
+
+        self.assertAlmostEqual(adjusted.epsilon, 4.0 / 255.0)
+        self.assertAlmostEqual(adjusted.step_size or 0.0, 1.0 / 255.0)
+        self.assertAlmostEqual(float(adjusted.extra["epsilon_radius_255"]), 4.0)
+
 
 class PGDAttackTest(unittest.TestCase):
     def test_pgd_respects_linf_budget_and_keeps_model_grads_clean(self) -> None:

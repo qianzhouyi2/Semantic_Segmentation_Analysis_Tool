@@ -1,0 +1,10 @@
+name: fgsm
+epsilon: 0.01568627450980392
+step_size: 0.01568627450980392
+steps: 1
+clamp_min: 0.0
+clamp_max: 1.0
+random_start: false
+targeted: false
+loss_name: cross_entropy
+ignore_index: 255

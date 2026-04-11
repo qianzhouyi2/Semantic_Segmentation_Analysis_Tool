@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from typing import Any
 
 import torch
@@ -69,6 +69,50 @@ class AttackConfig:
         if self.steps == 0:
             return 0.0
         return self.epsilon / float(self.steps)
+
+    def scaled(self, epsilon_scale: float) -> "AttackConfig":
+        if epsilon_scale <= 0:
+            raise ValueError("epsilon_scale must be positive.")
+
+        extra = dict(self.extra)
+        extra["epsilon_scale"] = float(epsilon_scale)
+        extra["base_epsilon"] = self.epsilon
+        if self.step_size is not None:
+            extra["base_step_size"] = self.step_size
+
+        return replace(
+            self,
+            epsilon=self.epsilon * float(epsilon_scale),
+            step_size=None if self.step_size is None else self.step_size * float(epsilon_scale),
+            extra=extra,
+        )
+
+    def with_radius_255(self, radius_255: float) -> "AttackConfig":
+        if radius_255 < 0 or radius_255 > 255:
+            raise ValueError("radius_255 must be within [0, 255].")
+
+        radius = float(radius_255)
+        epsilon = radius / 255.0
+        if self.step_size is None:
+            step_size = None
+        elif self.epsilon > 0:
+            step_size = self.step_size * (epsilon / self.epsilon)
+        else:
+            step_size = 0.0
+
+        extra = dict(self.extra)
+        extra["epsilon_radius_255"] = radius
+        extra["base_epsilon"] = self.epsilon
+        if self.step_size is not None:
+            extra["base_step_size"] = self.step_size
+        extra["epsilon_scale"] = 0.0 if self.epsilon == 0 else (epsilon / self.epsilon)
+
+        return replace(
+            self,
+            epsilon=epsilon,
+            step_size=step_size,
+            extra=extra,
+        )
 
 
 @dataclass(slots=True)
