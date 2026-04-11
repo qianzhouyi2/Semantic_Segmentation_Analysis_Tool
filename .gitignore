@@ -6,6 +6,7 @@ models/*.ckpt
 
 # Local data links
 datasets
+AGENTS.md
 
 # Python
 __pycache__/
