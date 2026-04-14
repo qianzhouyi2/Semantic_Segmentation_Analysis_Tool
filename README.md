@@ -7,7 +7,7 @@
 ## 当前能力
 
 - 数据集扫描与体检：检查图像和 mask 配对、缺失文件、尺寸不一致、空 mask、非法标签，并统计类别分布。
-- Streamlit 可视化：提供数据集概览卡片和 image / GT / prediction 三联图预览。
+- Streamlit 可视化：提供数据集扫描、三联图预览、对抗特征可视化和独立的 CAM 预览页面。
 - 分割结果评估：对预测 mask 与 GT mask 计算 pixel accuracy、mIoU、Dice、Precision、Recall、F1。
 - Pascal VOC clean 评测：加载本地 checkpoint，在 VOC2012 val 上输出标准分割指标和逐类结果。
 - 对抗攻击评测：支持多种分割攻击配置，并导出攻击后指标与扰动统计。
@@ -138,10 +138,12 @@ datasets/
 streamlit run app.py
 ```
 
-页面当前提供两块功能：
+页面当前提供四块功能：
 
 - `Dataset Scan`：扫描图像与 mask，展示总量、空 mask、异常标签和类别分布。
 - `Triplet Preview`：渲染原图、GT mask、预测 mask 的三联图。
+- `Adversarial Feature Preview`：单样本攻击预览，查看输入扰动、预测变化和逐层特征热图。
+- `CAM Preview`：单样本类激活图预览，固定使用最深可用 CAM 层，对比 clean / adversarial 注意区域。
 
 ### 2. 检查数据集结构与标签分布
 

@@ -6,6 +6,7 @@
 - 原图 / GT / prediction 三联图预览
 - Pascal VOC 单样本的对抗攻击预览
 - 逐层特征热图与 sample delta 热图可视化
+- 独立的 CAM 预览页面
 
 ## 1. 启动方式
 
@@ -28,7 +29,7 @@ streamlit run app.py
 
 ## 2. 页面结构
 
-前端当前有 3 个主页签：
+前端当前有 4 个主页签：
 
 ### `Dataset Scan`
 
@@ -78,6 +79,23 @@ streamlit run app.py
 - `src/models/backbones/vit.py`
 - `src/robustness/visualization.py`
 
+### `CAM Preview`
+
+用途：
+
+- 选择 Pascal VOC val 单样本
+- 选择模型 family 与 checkpoint
+- 选择攻击与对应 config
+- 设置扰动半径 `0-255`
+- 选择目标类别并查看 clean / adv 的类激活图
+- 固定使用最深可用 CAM 层，不暴露手动层选择
+
+核心代码：
+
+- `app.py`
+- `src/apps/adversarial_preview.py`
+- `src/visualization/cam.py`
+
 ## 3. 当前对抗预览交互
 
 对抗预览页的流程是：
@@ -102,7 +120,22 @@ streamlit run app.py
 - 当前层的 `Adversarial Feature`
 - 当前层的 `Abs Diff`
 
-## 4. 特征层命名规则
+## 4. 当前 CAM 交互
+
+`CAM Preview` 页复用同一套样本、模型和攻击选择逻辑，但交互遵循常规 CAM 用法：
+
+1. 先运行一次单样本 clean / adversarial 预览
+2. 前端自动选取当前模型最深的可用 CAM 层
+3. 用户只选择 `target class`
+4. 页面展示 clean CAM、adv CAM 和 CAM 差分图
+
+这样做的原因是：
+
+- 常规 CAM 一般固定在最后一个语义层
+- 浅层更偏纹理与边缘，不适合作为默认解释结果
+- 手动切层更适合研究调试，不适合作为默认前端交互
+
+## 5. 特征层命名规则
 
 为了让滑条下面显示稳定、可解释的层名，前端依赖统一的 feature key 命名。
 
@@ -127,7 +160,7 @@ streamlit run app.py
 - `upernet_convnext` 前端会优先显示逐 block 层
 - 如果某个模型只返回 stage 特征，前端会自动退回 stage 级显示
 
-## 5. Sample Delta 热图
+## 6. Sample Delta 热图
 
 `Sample Delta Heatmap` 是 clean sample 和 adversarial sample 的像素级差分热图，不依赖模型特征。
 
@@ -147,7 +180,7 @@ streamlit run app.py
 - 扰动主要集中在哪些区域
 - 当前攻击是不是只改了少量局部区域
 
-## 6. 缓存与状态
+## 7. 缓存与状态
 
 前端目前用两类状态：
 
@@ -171,13 +204,15 @@ streamlit run app.py
 - `adv_preview_signature`
 - `adv_preview_checkpoint_info`
 - `adv_layer_index`
+- `cam_preview_cam_result`
+- `cam_preview_cam_signature`
 
 目的：
 
 - 修改层滑条时复用上一次结果
 - 当样本 / 模型 / 攻击配置变更时提示“当前展示的是上一次运行结果”
 
-## 7. 前端开发建议
+## 8. 前端开发建议
 
 如果继续扩展前端，建议遵守下面的边界：
 
@@ -195,7 +230,7 @@ streamlit run app.py
 - 增加 clean / adv logits 或 attention 的对比页
 - 增加运行耗时与显存占用提示
 
-## 8. 常见问题
+## 9. 常见问题
 
 ### 页面里看不到模型 checkpoint
 
@@ -217,7 +252,11 @@ streamlit run app.py
 
 这是刻意保留的 clean baseline 模式。此时前端不会真正执行攻击，而是直接返回 clean sample，用于对照可视化。
 
-## 9. 相关文件
+### 为什么 `CAM Preview` 不再提供层选择
+
+这是有意收敛到常规 CAM 交互。页面固定使用最深可用层，只保留类别选择，避免把研究调试参数暴露成默认操作。
+
+## 10. 相关文件
 
 - `app.py`
 - `src/apps/dashboard.py`

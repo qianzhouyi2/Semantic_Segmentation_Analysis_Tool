@@ -145,7 +145,9 @@ class ConvNeXt(nn.Module):
             for block_idx, block in enumerate(self.stages[stage_idx]):
                 x = block(x)
                 if collect_intermediates:
-                    intermediates[f"backbone:stage{stage_idx}:block{block_idx:02d}"] = norm_layer(x)
+                    # Keep the true block output so gradients from downstream logits
+                    # can flow back to this tensor for CAM computation.
+                    intermediates[f"backbone:stage{stage_idx}:block{block_idx:02d}"] = x
             if stage_idx in self.out_indices:
                 normalized = norm_layer(x)
                 outputs.append(normalized)

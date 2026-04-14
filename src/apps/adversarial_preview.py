@@ -51,6 +51,8 @@ class FeaturePreviewResult:
     epsilon: float
     step_size: float
     steps: int
+    clean_tensor: torch.Tensor
+    adversarial_tensor: torch.Tensor
     clean_image: np.ndarray
     adversarial_image: np.ndarray
     perturbation_image: np.ndarray
@@ -218,6 +220,8 @@ def generate_feature_preview(
         epsilon=float(attack_config.epsilon),
         step_size=float(attack_config.resolved_step_size()),
         steps=int(attack_config.steps),
+        clean_tensor=images[0].detach().cpu(),
+        adversarial_tensor=attack_output.adversarial_images[0].detach().cpu(),
         clean_image=tensor_to_rgb_image(images),
         adversarial_image=tensor_to_rgb_image(attack_output.adversarial_images),
         perturbation_image=_perturbation_to_image(attack_output.perturbation),

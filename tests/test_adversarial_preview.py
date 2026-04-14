@@ -91,6 +91,17 @@ class AdversarialPreviewVisualizationTest(unittest.TestCase):
         self.assertIn("backbone:stage0:block00", intermediates)
         self.assertIn("backbone:stage3:block02", intermediates)
 
+    def test_convnext_block_intermediate_remains_on_logits_graph(self) -> None:
+        backbone = ConvNeXt("T_CVST")
+        inputs = torch.randn(1, 3, 64, 64)
+
+        stage_outputs, intermediates = backbone.forward_features(inputs, collect_intermediates=True)
+        score = sum(output.mean() for output in stage_outputs)
+        gradient = torch.autograd.grad(score, intermediates["backbone:stage0:block00"], allow_unused=False)[0]
+
+        self.assertIsNotNone(gradient)
+        self.assertEqual(tuple(gradient.shape), tuple(intermediates["backbone:stage0:block00"].shape))
+
     def test_generate_feature_preview_skips_attack_when_radius_is_zero(self) -> None:
         model = nn.Conv2d(1, 2, kernel_size=1, bias=True)
         with torch.no_grad():
@@ -117,6 +128,8 @@ class AdversarialPreviewVisualizationTest(unittest.TestCase):
             epsilon=0.1,
             step_size=0.1,
             steps=1,
+            clean_tensor=torch.zeros(3, 8, 8, dtype=torch.float32),
+            adversarial_tensor=torch.zeros(3, 8, 8, dtype=torch.float32),
             clean_image=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),
             adversarial_image=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),
             perturbation_image=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),
@@ -150,6 +163,8 @@ class AdversarialPreviewVisualizationTest(unittest.TestCase):
             epsilon=4.0 / 255.0,
             step_size=4.0 / 255.0,
             steps=1,
+            clean_tensor=torch.zeros(3, 8, 8, dtype=torch.float32),
+            adversarial_tensor=torch.zeros(3, 8, 8, dtype=torch.float32),
             clean_image=clean_image,
             adversarial_image=adversarial_image,
             perturbation_image=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),

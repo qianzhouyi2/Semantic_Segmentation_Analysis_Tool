@@ -85,6 +85,37 @@ def colorize_heatmap(heatmap: np.ndarray, cmap_name: str = "magma") -> np.ndarra
     return (colored * 255.0).clip(0, 255).astype(np.uint8)
 
 
+def normalize_heatmap(heatmap: np.ndarray) -> np.ndarray:
+    if heatmap.ndim != 2:
+        raise ValueError(f"Expected heatmap with shape [H, W], got {heatmap.shape}.")
+    if heatmap.size == 0:
+        return np.zeros_like(heatmap, dtype=np.float32)
+
+    data = heatmap.astype(np.float32, copy=False)
+    min_value = float(data.min())
+    max_value = float(data.max())
+    if max_value <= min_value:
+        return np.zeros_like(data, dtype=np.float32)
+    return (data - min_value) / (max_value - min_value)
+
+
+def overlay_heatmap_on_image(
+    image: np.ndarray,
+    heatmap: np.ndarray,
+    alpha: float = 0.45,
+    cmap_name: str = "jet",
+) -> np.ndarray:
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError(f"Expected RGB image with shape [H, W, 3], got {image.shape}.")
+    if heatmap.shape != image.shape[:2]:
+        raise ValueError(f"Heatmap shape {heatmap.shape} must match image shape {image.shape[:2]}.")
+
+    colored = colorize_heatmap(heatmap, cmap_name=cmap_name).astype(np.float32)
+    base = image.astype(np.float32)
+    blended = (1.0 - alpha) * base + alpha * colored
+    return np.clip(blended, 0, 255).astype(np.uint8)
+
+
 def summarize_image_delta(
     clean_image: torch.Tensor | np.ndarray,
     adversarial_image: torch.Tensor | np.ndarray,
