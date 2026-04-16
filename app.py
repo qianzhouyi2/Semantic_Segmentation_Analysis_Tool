@@ -18,7 +18,7 @@ from src.apps.dashboard import build_overview_cards
 from src.attacks import AttackConfig
 from src.common.config import load_dataset_config, load_label_config
 from src.common.config import load_yaml
-from src.datasets import discover_pascal_voc_samples
+from src.datasets import discover_ade20k_samples, discover_cityscapes_samples, discover_pascal_voc_samples
 from src.datasets.scanner import scan_dataset
 from src.datasets.stats import compute_class_statistics
 from src.datasets.voc import PascalVOCValidationDataset
@@ -53,11 +53,26 @@ def _default_pascal_voc_config_paths() -> tuple[Path, Path]:
     return Path("configs/datasets/pascal_voc.yaml"), Path("configs/labels/pascal_voc.yaml")
 
 
+def _default_cityscapes_config_path() -> Path:
+    return Path("configs/datasets/cityscapes.yaml")
+
+
+def _default_ade20k_config_path() -> Path:
+    return Path("configs/datasets/ade20k.yaml")
+
+
 def _resolve_pascal_voc_label_config_path(default_label_config_path: str) -> str:
     _, voc_label_config_path = _default_pascal_voc_config_paths()
     if voc_label_config_path.exists():
         return str(voc_label_config_path)
     return default_label_config_path
+
+
+def _resolve_optional_repo_label_config_path(filename: str) -> str:
+    candidate = Path("configs/labels") / filename
+    if candidate.exists():
+        return str(candidate)
+    return ""
 
 
 @st.cache_resource(show_spinner=False)
@@ -290,6 +305,98 @@ def _render_pascal_voc_triplet_preview(default_label_config_path: str):
     selected_sample_id = st.selectbox("VOC val sample", options=[sample.sample_id for sample in samples])
     selected_sample = next(sample for sample in samples if sample.sample_id == selected_sample_id)
     prediction_path = prediction_dir / f"{selected_sample.sample_id}.png" if prediction_dir is not None else None
+
+    st.caption(
+        "\n".join(
+            [
+                f"Image: {selected_sample.image_path}",
+                f"GT: {selected_sample.mask_path}",
+                f"Prediction: {prediction_path}" if prediction_path is not None else "Prediction: <missing>",
+            ]
+        )
+    )
+
+    _run_triplet_preview(
+        label_config_path=label_config_path,
+        image_path_text=str(selected_sample.image_path),
+        gt_path_text=str(selected_sample.mask_path),
+        pred_path_text=str(prediction_path) if prediction_path is not None else "",
+        alpha=alpha,
+        show_legend=show_legend,
+    )
+
+
+def _render_cityscapes_triplet_preview() -> None:
+    dataset_config_path = _default_cityscapes_config_path()
+    label_config_path = _resolve_optional_repo_label_config_path("cityscapes.yaml")
+
+    dataset_root = st.text_input("Cityscapes dataset root", "datasets")
+    prediction_dir_text = st.text_input("Cityscapes prediction directory", "")
+    alpha = st.slider("Overlay alpha", min_value=0.0, max_value=1.0, value=0.45, step=0.05, key="cityscapes_alpha")
+    show_legend = st.checkbox("Show class legend", value=True, key="cityscapes_legend")
+
+    try:
+        samples = discover_cityscapes_samples(dataset_root, split="val")
+    except (FileNotFoundError, ValueError) as exc:
+        st.info(str(exc))
+        if dataset_config_path.exists():
+            st.caption(f"Suggested dataset config: {dataset_config_path}")
+        return
+
+    prediction_dir = Path(prediction_dir_text.strip()) if prediction_dir_text.strip() else None
+    if prediction_dir is not None and not prediction_dir.exists():
+        st.warning("Cityscapes prediction directory does not exist. Preview will use image and GT only.")
+        prediction_dir = None
+
+    selected_sample_id = st.selectbox("Cityscapes val sample", options=[sample.sample_id for sample in samples])
+    selected_sample = next(sample for sample in samples if sample.sample_id == selected_sample_id)
+    prediction_path = prediction_dir / selected_sample.relative_mask_path if prediction_dir is not None else None
+
+    st.caption(
+        "\n".join(
+            [
+                f"Image: {selected_sample.image_path}",
+                f"GT: {selected_sample.mask_path}",
+                f"Prediction: {prediction_path}" if prediction_path is not None else "Prediction: <missing>",
+            ]
+        )
+    )
+
+    _run_triplet_preview(
+        label_config_path=label_config_path,
+        image_path_text=str(selected_sample.image_path),
+        gt_path_text=str(selected_sample.mask_path),
+        pred_path_text=str(prediction_path) if prediction_path is not None else "",
+        alpha=alpha,
+        show_legend=show_legend,
+    )
+
+
+def _render_ade20k_triplet_preview() -> None:
+    dataset_config_path = _default_ade20k_config_path()
+    label_config_path = _resolve_optional_repo_label_config_path("ade20k.yaml")
+
+    dataset_root = st.text_input("ADE20K dataset root", "datasets")
+    prediction_dir_text = st.text_input("ADE20K prediction directory", "")
+    alpha = st.slider("Overlay alpha", min_value=0.0, max_value=1.0, value=0.45, step=0.05, key="ade20k_alpha")
+    show_legend = st.checkbox("Show class legend", value=True, key="ade20k_legend")
+
+    try:
+        samples = discover_ade20k_samples(dataset_root, split="validation")
+    except (FileNotFoundError, ValueError) as exc:
+        st.info(str(exc))
+        if dataset_config_path.exists():
+            st.caption(f"Suggested dataset config: {dataset_config_path}")
+        return
+
+    prediction_dir = Path(prediction_dir_text.strip()) if prediction_dir_text.strip() else None
+    if prediction_dir is not None and not prediction_dir.exists():
+        st.warning("ADE20K prediction directory does not exist. Preview will use image and GT only.")
+        prediction_dir = None
+
+    selected_sample_id = st.selectbox("ADE20K validation sample", options=[sample.sample_id for sample in samples])
+    selected_sample = next(sample for sample in samples if sample.sample_id == selected_sample_id)
+    prediction_path = prediction_dir / selected_sample.relative_mask_path if prediction_dir is not None else None
 
     st.caption(
         "\n".join(
@@ -966,7 +1073,7 @@ def main() -> None:
     with preview_tab:
         preview_mode = st.radio(
             "Preview mode",
-            options=["Dataset browser", "Pascal VOC demo", "Manual paths"],
+            options=["Dataset browser", "Pascal VOC demo", "Cityscapes demo", "ADE20K demo", "Manual paths"],
             horizontal=True,
         )
         if preview_mode == "Dataset browser":
@@ -978,6 +1085,10 @@ def main() -> None:
             )
         elif preview_mode == "Pascal VOC demo":
             _render_pascal_voc_triplet_preview(label_config_path)
+        elif preview_mode == "Cityscapes demo":
+            _render_cityscapes_triplet_preview()
+        elif preview_mode == "ADE20K demo":
+            _render_ade20k_triplet_preview()
         else:
             image_path = st.text_input("Image path", "")
             gt_path = st.text_input("GT mask path", "")

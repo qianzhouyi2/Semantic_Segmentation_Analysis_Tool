@@ -1,0 +1,7 @@
+name: cityscapes
+image_dir: datasets/cityscapes/leftImg8bit/val
+mask_dir: datasets/cityscapes/gtFine/val
+image_suffixes:
+  - .png
+mask_suffixes:
+  - .png

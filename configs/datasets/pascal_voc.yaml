@@ -1,0 +1,7 @@
+name: pascal_voc_2012
+image_dir: datasets/VOCdevkit/VOC2012/JPEGImages
+mask_dir: datasets/VOCdevkit/VOC2012/SegmentationClass
+image_suffixes:
+  - .jpg
+mask_suffixes:
+  - .png

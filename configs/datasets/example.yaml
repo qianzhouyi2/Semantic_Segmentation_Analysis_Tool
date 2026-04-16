@@ -1,0 +1,9 @@
+name: example_dataset
+image_dir: datasets/images
+mask_dir: datasets/masks
+image_suffixes:
+  - .jpg
+  - .jpeg
+  - .png
+mask_suffixes:
+  - .png
