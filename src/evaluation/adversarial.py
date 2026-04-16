@@ -7,7 +7,13 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.attacks import AttackConfig, AttackRunner
+from src.attacks import (
+    AttackConfig,
+    AttackRunner,
+    finalize_attack_runtime_aggregate,
+    init_attack_runtime_aggregate,
+    update_attack_runtime_aggregate,
+)
 from src.metrics.segmentation import compute_confusion_matrix, summarize_confusion_matrix
 from src.models.base import SegmentationModelAdapter
 
@@ -30,6 +36,7 @@ def evaluate_adversarial_segmentation_model(
     filenames: list[str] = []
     linf_values: list[torch.Tensor] = []
     l2_values: list[torch.Tensor] = []
+    attack_runtime_aggregate = init_attack_runtime_aggregate(attack_config)
 
     for batch_index, batch in enumerate(dataloader):
         if not isinstance(batch, (list, tuple)) or len(batch) < 2:
@@ -42,6 +49,11 @@ def evaluate_adversarial_segmentation_model(
             filenames.extend([str(item) for item in batch[2]])
 
         attack_output = attack_runner.run(config=attack_config, images=images, targets=targets)
+        update_attack_runtime_aggregate(
+            attack_runtime_aggregate,
+            dict(attack_output.metadata),
+            batch_size=images.shape[0],
+        )
         with torch.no_grad():
             predictions = model.predict(attack_output.adversarial_images).cpu().numpy()
 
@@ -67,6 +79,7 @@ def evaluate_adversarial_segmentation_model(
     metrics = summarize_confusion_matrix(confusion, class_names=class_names)
     linf_tensor = torch.cat(linf_values) if linf_values else torch.empty(0)
     l2_tensor = torch.cat(l2_values) if l2_values else torch.empty(0)
+    attack_runtime_metadata = finalize_attack_runtime_aggregate(attack_runtime_aggregate)
     payload = {
         "processed_batches": processed_batches,
         "processed_samples": processed_samples,
@@ -94,6 +107,8 @@ def evaluate_adversarial_segmentation_model(
             "mean_linf": float(linf_tensor.mean().item()) if linf_tensor.numel() else 0.0,
             "max_linf": float(linf_tensor.max().item()) if linf_tensor.numel() else 0.0,
             "mean_l2": float(l2_tensor.mean().item()) if l2_tensor.numel() else 0.0,
+            **attack_config.protocol_metadata(),
+            **attack_runtime_metadata,
             "extra": attack_config.extra,
         },
     }

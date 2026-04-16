@@ -8,6 +8,7 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 import yaml
 
+from src.common.sparse_workflow import resolve_sparse_config_from_search_summary, serialize_sparse_defense_config
 from src.reporting.exporter import write_json, write_markdown
 
 
@@ -27,13 +28,6 @@ def parse_args() -> argparse.Namespace:
 
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def relativize_path(target: Path, base_dir: Path) -> str:
-    try:
-        return os.path.relpath(target, start=base_dir)
-    except ValueError:
-        return str(target)
 
 
 def repo_relative_path(target: Path, repo_root: Path) -> str:
@@ -59,16 +53,10 @@ def main() -> None:
         family = str(payload["family"])
         variant = str(payload["variant"])
         best_threshold = float(payload["best_threshold"]["threshold"])
-        stats_path = Path(payload["stats_path"])
 
         config_path = output_dir / f"{checkpoint_name}_{variant}.yaml"
-        config_payload = {
-            "name": variant,
-            "family": family,
-            "threshold": best_threshold,
-            "stats_path": relativize_path(stats_path.resolve(), config_path.parent.resolve()),
-            "strict_stats": True,
-        }
+        config = resolve_sparse_config_from_search_summary(payload, summary_path=summary_path)
+        config_payload = serialize_sparse_defense_config(config, relative_to=config_path.parent.resolve())
         config_path.write_text(yaml.safe_dump(config_payload, sort_keys=False), encoding="utf-8")
         written_paths.append(config_path)
         rows.append(
@@ -78,9 +66,15 @@ def main() -> None:
                 "family": family,
                 "variant": variant,
                 "threshold": best_threshold,
-                "stats_path": repo_relative_path(stats_path, repo_root),
+                "stats_path": repo_relative_path(Path(config.stats_path), repo_root),
                 "config_path": repo_relative_path(config_path, repo_root),
                 "search_summary": repo_relative_path(summary_path, repo_root),
+                "defense_template_config": (
+                    None
+                    if payload.get("defense_template_config") in {None, ""}
+                    else repo_relative_path(Path(payload["defense_template_config"]), repo_root)
+                ),
+                "variant_hyperparameters": payload.get("variant_hyperparameters", {}),
             }
         )
 

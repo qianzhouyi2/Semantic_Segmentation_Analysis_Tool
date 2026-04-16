@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -p gpu
 #SBATCH --job-name=voc_allatt_sum
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/slurm-%x-%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 FEISHU_CONFIG="${HOME}/.feishu/config.json"
 FEISHU_BRIDGE="${FEISHU_BRIDGE:-${HOME}/tools/feishu/interactive_bridge.py}"
 

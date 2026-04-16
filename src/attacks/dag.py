@@ -12,6 +12,30 @@ class DAGAttack(SegmentationAttack):
 
     attack_name = "dag"
 
+    def _objective(
+        self,
+        attack_input: torch.Tensor,
+        *,
+        valid_mask: torch.Tensor,
+        safe_targets: torch.Tensor,
+        safe_target_labels: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float | int]]:
+        logits = self.model.logits(attack_input)
+        predictions = logits.argmax(dim=1)
+        active_mask = valid_mask & (predictions == safe_targets)
+        active_pixels = int(active_mask.sum().detach().cpu().item())
+        if active_pixels == 0:
+            return logits.sum() * 0.0, {"loss": 0.0, "active_pixels": 0}
+
+        true_logits = logits.gather(1, safe_targets.unsqueeze(1)).squeeze(1)
+        target_logits = logits.gather(1, safe_target_labels.unsqueeze(1)).squeeze(1)
+        objective_map = active_mask.float().detach() * (target_logits - true_logits)
+        loss = objective_map.sum() / active_mask.float().sum().clamp_min(1.0)
+        return loss, {
+            "loss": float(loss.detach().cpu().item()),
+            "active_pixels": active_pixels,
+        }
+
     def run(self, images: torch.Tensor, targets: torch.Tensor) -> AttackOutput:
         if self.config.targeted:
             raise NotImplementedError("DAG targeted mode is not supported in this pipeline.")
@@ -47,20 +71,23 @@ class DAGAttack(SegmentationAttack):
         loss_value = 0.0
         with torch.enable_grad():
             for _ in range(steps):
-                adversarial = adversarial.detach().requires_grad_(True)
-                logits = self.model.logits(adversarial)
-                predictions = logits.argmax(dim=1)
-                active_mask = valid_mask & (predictions == safe_targets)
-                active_pixels = int(active_mask.sum().detach().cpu().item())
+                gradient, stats = self.estimate_input_gradient(
+                    adversarial,
+                    lambda attack_input: self._objective(
+                        attack_input=attack_input,
+                        valid_mask=valid_mask,
+                        safe_targets=safe_targets,
+                        safe_target_labels=safe_target_labels,
+                    ),
+                )
+                if isinstance(stats, dict):
+                    active_pixels = int(stats["active_pixels"])
+                    loss_value = float(stats["loss"])
+                else:
+                    loss_value = float(stats)
                 if active_pixels == 0:
                     adversarial = adversarial.detach()
                     break
-
-                true_logits = logits.gather(1, safe_targets.unsqueeze(1)).squeeze(1)
-                target_logits = logits.gather(1, safe_target_labels.unsqueeze(1)).squeeze(1)
-                objective_map = active_mask.float().detach() * (target_logits - true_logits)
-                loss = objective_map.sum() / active_mask.float().sum().clamp_min(1.0)
-                gradient = torch.autograd.grad(loss, adversarial, retain_graph=False, create_graph=False)[0]
                 adversarial = adversarial.detach() + step_size * gradient.sign()
                 adversarial = project_linf(
                     adversarial_images=adversarial,
@@ -69,7 +96,6 @@ class DAGAttack(SegmentationAttack):
                     min_value=self.config.clamp_min,
                     max_value=self.config.clamp_max,
                 )
-                loss_value = float(loss.detach().cpu().item())
 
         perturbation = adversarial - clean
         return AttackOutput(

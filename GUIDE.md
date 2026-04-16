@@ -97,10 +97,13 @@
 - `dir_extra_sparse`
 - `margin_extra_sparse`
 
-当前自动化阈值搜索脚本直接支持：
+当前自动化 workflow 也已经支持这 5 个变体：
 
-- `meansparse`
-- `extrasparse`
+- sidecar 准备
+- threshold search
+- sparse config materialization
+- VOC attack suite manifest
+- VOC transfer protocol manifest
 
 配置示例位于 `configs/defenses/`，统计 sidecar 默认放在 `models/defenses/`。
 
@@ -113,7 +116,7 @@ conda activate segtool
 python -m pip install -r requirements.txt
 ```
 
-所有命令都应从仓库根目录运行。
+所有命令都应从仓库根目录运行。核心 CLI 除了 `python scripts/foo.py ...` 之外，也支持从仓库根目录执行 `python -m scripts.foo --help` 来检查 import / argparse 链路。
 
 Pascal VOC 评测默认期望目录为：
 
@@ -206,6 +209,48 @@ results/reports/voc_adv_eval/<checkpoint_stem>_<attack_name>/
 - `max_linf`
 - `mean_l2`
 - 可选的 `feature_visualizations`
+
+当前 `run_attack.py` 也支持 journal-style adaptive white-box 评测增强：
+
+- `--attack-backward-mode {default,bpda_ste}`：把 sparse modules 的 backward 切到 BPDA/STE。
+- `--num-restarts N`：对每个 sample 做 worst-case restart 选择。
+- `--eot-iters N`：重复 forward/backward 平均梯度。
+- `--epsilon-radius-255 R`：直接覆盖 YAML budget 到 `R/255`。
+- `--epsilon-radius-255-sweep 2 4 8`：一次命令生成多 budget 结果和汇总表。
+
+推荐的 sparse defense adaptive PGD 命令：
+
+```bash
+python scripts/run_attack.py \
+  --attack-config configs/attacks/pgd_adaptive_sparse_strong.yaml \
+  --family upernet_convnext \
+  --checkpoint models/UperNet_ConvNext_T_VOC_clean.pth \
+  --defense-config configs/defenses/meansparse_example.yaml \
+  --epsilon-radius-255 4 \
+  --dataset-root datasets
+```
+
+如果要直接做 `2/255, 4/255, 8/255` 的 budget sweep：
+
+```bash
+python scripts/run_attack.py \
+  --attack-config configs/attacks/pgd_adaptive_sparse_strong.yaml \
+  --family upernet_convnext \
+  --checkpoint models/UperNet_ConvNext_T_VOC_clean.pth \
+  --defense-config configs/defenses/meansparse_example.yaml \
+  --epsilon-radius-255-sweep 2 4 8 \
+  --dataset-root datasets
+```
+
+对应的 Slurm 模板：
+
+```bash
+FAMILY=upernet_convnext \
+CHECKPOINT=models/UperNet_ConvNext_T_VOC_clean.pth \
+DEFENSE_CONFIG=configs/defenses/meansparse_example.yaml \
+OUTPUT_DIR=results/reports/voc_adaptive_whitebox/convnext_meansparse \
+sbatch scripts/submit_voc_adaptive_whitebox_eval.sbatch
+```
 
 ### 4.5 clean / adv 结果对比
 
@@ -305,12 +350,28 @@ python scripts/search_sparse_thresholds.py \
   --output-dir results/reports/sparse_search/UperNet_ConvNext_T_VOC_clean/meansparse
 ```
 
+对于 `cc_extra_sparse` / `dir_extra_sparse` / `margin_extra_sparse`，当前阶段仍然是“threshold sweep + template config 继承”，也就是只扫 `threshold`，其余参数从模板 YAML 继承：
+
+```bash
+python scripts/search_sparse_thresholds.py \
+  --family upernet_convnext \
+  --checkpoint models/UperNet_ConvNext_T_VOC_clean.pth \
+  --variant dir_extra_sparse \
+  --stats-path models/defenses/dir_extra_sparse/UperNet_ConvNext_T_VOC_clean_dir_extra_sparse_train.pt \
+  --defense-template-config configs/defenses/dir_extra_sparse_example.yaml \
+  --attack-config configs/attacks/pgd.yaml \
+  --dataset-root datasets \
+  --dataset-split train \
+  --output-dir results/reports/sparse_search/UperNet_ConvNext_T_VOC_clean/dir_extra_sparse
+```
+
 这个脚本会：
 
 - 对一组阈值分别跑 clean 和 PGD。
 - 生成每个阈值自己的 `results.json`。
 - 生成 `search_summary.json` 和 `search_summary.md`。
 - 在 clean / adv 双目标上给出 Pareto frontier 和 best threshold。
+- 在 summary 中写入 `defense_template_config`、`effective_defense_config`、`variant_hyperparameters`。
 
 如果要汇总多个 case 的搜索结果，可以再跑：
 
@@ -318,6 +379,19 @@ python scripts/search_sparse_thresholds.py \
 python scripts/summarize_sparse_threshold_search.py \
   --search-root results/reports/sparse_search
 ```
+
+如果要把搜索结果 materialize 成最终防御 YAML：
+
+```bash
+python scripts/materialize_sparse_defense_configs.py \
+  --search-root results/reports/sparse_search \
+  --output-dir configs/defenses
+```
+
+生成的 YAML 会保留：
+
+- 通用字段：`name`、`family`、`threshold`、`stats_path`、`strict_stats`
+- postsparse 额外字段：`direction_mode`、`lambda_mix`、`alpha0`、`alpha0_mode`、`beta`、`beta_scale`、`tau`
 
 ### 4.8 用 Slurm 跑批量协议
 
@@ -345,6 +419,8 @@ sbatch scripts/submit_voc_clean_eval.sbatch
 - 6 个 `meansparse`
 - 6 个 `extrasparse`
 
+如果你希望把全部 5 个 sparse 变体都接进 manifest，可以直接传 `--variants all`，此时模型数量会按 `6 * (1 + sparse_variants)` 自动扩展。
+
 然后统一跑：
 
 - white-box: `pgd`、`segpgd`
@@ -355,7 +431,8 @@ sbatch scripts/submit_voc_clean_eval.sbatch
 ```bash
 python scripts/materialize_voc_attack_suite_manifest.py \
   --search-root results/reports/sparse_search \
-  --output-dir results/reports/voc_attack_suite_manifest
+  --output-dir results/reports/voc_attack_suite_manifest \
+  --variants all
 ```
 
 ```bash
@@ -363,6 +440,21 @@ python scripts/launch_voc_attack_suite.py \
   --manifest results/reports/voc_attack_suite_manifest/attack_suite_manifest.json \
   --suite-root results/reports/voc_attack_suite \
   --dataset-root datasets
+```
+
+如果你要把 suite 里的 white-box 直接切到 adaptive sparse-defense protocol，可以直接加：
+
+```bash
+python scripts/launch_voc_attack_suite.py \
+  --manifest results/reports/voc_attack_suite_manifest/attack_suite_manifest.json \
+  --suite-root results/reports/voc_attack_suite_adaptive \
+  --dataset-root datasets \
+  --pgd-config configs/attacks/pgd_adaptive_sparse_strong.yaml \
+  --segpgd-config configs/attacks/segpgd_adaptive_sparse_strong.yaml \
+  --epsilon-radius-255 8 \
+  --attack-backward-mode bpda_ste \
+  --num-restarts 5 \
+  --eot-iters 4
 ```
 
 ```bash
@@ -378,7 +470,8 @@ python scripts/summarize_voc_attack_suite.py \
 ```bash
 python scripts/materialize_voc_transfer_protocol_manifest.py \
   --search-root results/reports/sparse_search \
-  --output-dir results/reports/voc_transfer_protocol_manifest
+  --output-dir results/reports/voc_transfer_protocol_manifest \
+  --variants all
 ```
 
 ```bash
@@ -388,10 +481,67 @@ python scripts/launch_voc_transfer_protocol.py \
   --dataset-root datasets
 ```
 
+如果 source 端也要走更强的 adaptive attack，可以直接覆盖 protocol：
+
+```bash
+python scripts/launch_voc_transfer_protocol.py \
+  --manifest results/reports/voc_transfer_protocol_manifest/transfer_protocol_manifest.json \
+  --suite-root results/reports/voc_transfer_protocol_adaptive \
+  --dataset-root datasets \
+  --epsilon-radius-255 8 \
+  --attack-backward-mode bpda_ste \
+  --num-restarts 5 \
+  --eot-iters 4
+```
+
 ```bash
 python scripts/summarize_voc_transfer_protocol.py \
   --manifest results/reports/voc_transfer_protocol_manifest/transfer_protocol_manifest.json \
   --suite-root results/reports/voc_transfer_protocol
+```
+
+#### train split 上的批量 sparse threshold search
+
+如果你要通过 Slurm 在 VOC train split 上批量准备 sidecar 并搜索 6 个 base model 的 sparse 阈值，可以直接用：
+
+```bash
+sbatch scripts/submit_search_voc_train_all_sparse_cases.sh
+```
+
+如果你希望先准备缺失 sidecar，再自动提交 threshold search，可以直接用联动脚本：
+
+```bash
+scripts/submit_prepare_and_search_voc_train_all_sparse_cases.sh
+```
+
+这个联动脚本按 `(checkpoint, variant)` 拆成独立的 prepare/search case，search 只依赖自己的 prepare case，更适合多卡并发。
+
+默认会覆盖 5 个 sparse 变体，也支持通过环境变量收缩或扩展：
+
+```bash
+RESULTS_ROOT=results/reports/voc_train_threshold_search_all \
+DATASET_ROOT=datasets \
+DATASET_SPLIT=train \
+THRESHOLDS="0.05 0.10 0.15 0.20 0.25" \
+VARIANTS="meansparse extrasparse cc_extra_sparse dir_extra_sparse margin_extra_sparse" \
+sbatch scripts/submit_search_voc_train_all_sparse_cases.sh
+```
+
+联动脚本支持同样的覆盖变量，同时区分：
+
+- `OUTPUT_ROOT`：sidecar 输出根目录
+- `RESULTS_ROOT`：threshold search 输出根目录
+
+例如：
+
+```bash
+OUTPUT_ROOT=models/defenses \
+RESULTS_ROOT=results/reports/voc_train_threshold_search_all \
+DATASET_ROOT=datasets \
+DATASET_SPLIT=train \
+THRESHOLDS="0.05 0.10 0.15 0.20 0.25" \
+VARIANTS="cc_extra_sparse dir_extra_sparse margin_extra_sparse" \
+scripts/submit_prepare_and_search_voc_train_all_sparse_cases.sh
 ```
 
 #### full all-attacks 套件

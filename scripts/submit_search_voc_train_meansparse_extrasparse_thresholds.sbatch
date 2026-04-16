@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -p gpu
 #SBATCH --job-name=voc_thr_search
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/slurm-%x-%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:2
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 DATASET_ROOT="${DATASET_ROOT:-datasets}"
 DATASET_SPLIT="${DATASET_SPLIT:-train}"
 ATTACK_CONFIG="${ATTACK_CONFIG:-${PROJECT_ROOT}/configs/attacks/pgd.yaml}"

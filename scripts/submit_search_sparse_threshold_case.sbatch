@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -p gpu
 #SBATCH --job-name=sparse_thr_case
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/slurm-%x-%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 FAMILY="${FAMILY:?FAMILY is required}"
 CHECKPOINT="${CHECKPOINT:?CHECKPOINT is required}"
 VARIANT="${VARIANT:?VARIANT is required}"
@@ -28,6 +28,7 @@ BATCH_SIZE_CLEAN="${BATCH_SIZE_CLEAN:-8}"
 BATCH_SIZE_ADV="${BATCH_SIZE_ADV:-2}"
 CALIB_BATCH_SIZE="${CALIB_BATCH_SIZE:-4}"
 DEVICE="${DEVICE:-cuda}"
+DEFENSE_TEMPLATE_CONFIG="${DEFENSE_TEMPLATE_CONFIG:-${PROJECT_ROOT}/configs/defenses/${VARIANT}_example.yaml}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%F %T')" "$*"
@@ -60,14 +61,13 @@ ensure_sidecar() {
   local output_dir="${SIDECAR_ROOT}/${VARIANT}"
   local stats_path="${output_dir}/${checkpoint_stem}_${VARIANT}_${DATASET_SPLIT}.pt"
   local summary_path="${output_dir}/${checkpoint_stem}_${VARIANT}_${DATASET_SPLIT}.summary.json"
-  local config_path="${PROJECT_ROOT}/configs/defenses/${VARIANT}_example.yaml"
   mkdir -p "${output_dir}"
   if [[ ! -f "${stats_path}" ]]; then
     log "Preparing sidecar variant=${VARIANT} family=${FAMILY} checkpoint=${CHECKPOINT}" >&2
     python "${PROJECT_ROOT}/scripts/prepare_sparse_defense.py" \
       --family "${FAMILY}" \
       --checkpoint "${PROJECT_ROOT}/${CHECKPOINT}" \
-      --defense-config "${config_path}" \
+      --defense-config "${DEFENSE_TEMPLATE_CONFIG}" \
       --dataset-root "${DATASET_ROOT}" \
       --dataset-split "${DATASET_SPLIT}" \
       --output-stats "${stats_path}" \
@@ -92,6 +92,7 @@ log "family=${FAMILY}"
 log "checkpoint=${CHECKPOINT}"
 log "variant=${VARIANT}"
 log "stats_path=${STATS_PATH}"
+log "defense_template_config=${DEFENSE_TEMPLATE_CONFIG}"
 log "dataset_root=${DATASET_ROOT}"
 log "dataset_split=${DATASET_SPLIT}"
 log "thresholds=${THRESHOLDS}"
@@ -101,6 +102,7 @@ python "${PROJECT_ROOT}/scripts/search_sparse_thresholds.py" \
   --checkpoint "${PROJECT_ROOT}/${CHECKPOINT}" \
   --variant "${VARIANT}" \
   --stats-path "${STATS_PATH}" \
+  --defense-template-config "${DEFENSE_TEMPLATE_CONFIG}" \
   --attack-config "${ATTACK_CONFIG}" \
   --dataset-root "${DATASET_ROOT}" \
   --dataset-split "${DATASET_SPLIT}" \

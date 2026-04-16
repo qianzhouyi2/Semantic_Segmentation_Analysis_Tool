@@ -10,7 +10,14 @@ from torch.utils.data import DataLoader
 
 import _bootstrap  # noqa: F401
 
-from src.attacks import AttackConfig, AttackRunner
+from src.attacks import (
+    ATTACK_BACKWARD_MODE_CHOICES,
+    AttackConfig,
+    AttackRunner,
+    finalize_attack_runtime_aggregate,
+    init_attack_runtime_aggregate,
+    update_attack_runtime_aggregate,
+)
 from src.common import setup_logger
 from src.datasets import PASCAL_VOC_CLASS_NAMES, PascalVOCValidationDataset
 from src.metrics.segmentation import compute_confusion_matrix, summarize_confusion_matrix
@@ -29,6 +36,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda", help="Torch device.")
     parser.add_argument("--num-classes", type=int, default=21, help="Segmentation class count.")
     parser.add_argument("--max-batches", type=int, default=-1, help="Optional early stop for debugging.")
+    parser.add_argument(
+        "--epsilon-scale",
+        type=float,
+        default=1.0,
+        help="Scale epsilon and explicit step_size from the attack YAML unless an absolute radius override is given.",
+    )
+    parser.add_argument(
+        "--epsilon-radius-255",
+        type=float,
+        default=None,
+        help="Override the Linf budget with an absolute radius specified in pixel-space units out of 255.",
+    )
+    parser.add_argument(
+        "--attack-backward-mode",
+        choices=ATTACK_BACKWARD_MODE_CHOICES,
+        default="default",
+        help="Backward pass mode for sparse modules on the source model during attack generation.",
+    )
+    parser.add_argument(
+        "--num-restarts",
+        type=int,
+        default=1,
+        help="Number of attack restarts. Worst-case adversarial examples are selected sample-wise across restarts.",
+    )
+    parser.add_argument(
+        "--eot-iters",
+        type=int,
+        default=1,
+        help="Number of forward/backward samples used for EOT-style gradient averaging on the source model.",
+    )
     parser.add_argument("--strict", dest="strict", action="store_true", help="Strict checkpoint loading.")
     parser.add_argument("--no-strict", dest="strict", action="store_false", help="Allow checkpoint mismatch.")
     parser.set_defaults(strict=True)
@@ -108,7 +145,19 @@ def main() -> None:
         output_dir / "evaluate.log",
     )
     device = torch.device(args.device if args.device.startswith("cuda") and torch.cuda.is_available() else "cpu")
-    attack_config = AttackConfig.from_dict(load_yaml(Path(case["attack_config"])))
+    attack_config = AttackConfig.from_dict(load_yaml(Path(case["attack_config"]))).with_runtime_overrides(
+        epsilon_scale=args.epsilon_scale,
+        epsilon_radius_255=args.epsilon_radius_255,
+        attack_backward_mode=args.attack_backward_mode,
+        num_restarts=args.num_restarts,
+        eot_iters=args.eot_iters,
+    )
+    if args.epsilon_radius_255 is not None and args.epsilon_scale != 1.0:
+        logger.warning(
+            "--epsilon-radius-255=%s overrides --epsilon-scale=%s; using the absolute radius override.",
+            args.epsilon_radius_255,
+            args.epsilon_scale,
+        )
 
     logger.info(
         "Starting transfer group evaluation: case=%s attack=%s source=%s device=%s",
@@ -161,6 +210,7 @@ def main() -> None:
     filenames: list[str] = []
     processed_batches = 0
     processed_samples = 0
+    attack_runtime_aggregate = init_attack_runtime_aggregate(attack_config)
 
     for batch_index, batch in enumerate(dataloader):
         images = batch[0].to(device, non_blocking=True)
@@ -180,6 +230,11 @@ def main() -> None:
             update_confusion(clean_confusions[target_id], targets_cpu, clean_pred, args.num_classes)
 
         attack_output = attack_runner.run(config=attack_config, images=images, targets=targets)
+        update_attack_runtime_aggregate(
+            attack_runtime_aggregate,
+            dict(attack_output.metadata),
+            batch_size=images.shape[0],
+        )
         with torch.no_grad():
             source_adv_pred = source_adapter.predict(attack_output.adversarial_images).cpu().numpy()
         update_confusion(adv_confusions["source_self"], targets_cpu, source_adv_pred, args.num_classes)
@@ -203,6 +258,7 @@ def main() -> None:
 
     linf_tensor = torch.cat(linf_values) if linf_values else torch.empty(0)
     l2_tensor = torch.cat(l2_values) if l2_values else torch.empty(0)
+    attack_runtime_metadata = finalize_attack_runtime_aggregate(attack_runtime_aggregate)
 
     source_self = {
         "model": source_info | {"model_id": case["source"]["model_id"]},
@@ -239,6 +295,8 @@ def main() -> None:
             "step_size": attack_config.resolved_step_size(),
             "steps": attack_config.steps,
             "random_start": attack_config.random_start,
+            **attack_config.protocol_metadata(),
+            **attack_runtime_metadata,
         },
         "dataset": {
             "root": str(Path(args.dataset_root).resolve()),
@@ -266,6 +324,18 @@ def main() -> None:
             f"- relation: {case['relation']}",
             f"- regime: {case['regime']}",
             f"- attack: {attack_config.name}",
+            f"- epsilon: {attack_config.epsilon}",
+            f"- epsilon_radius_255: {attack_config.epsilon_radius_255() if attack_config.epsilon_radius_255() is not None else '<none>'}",
+            f"- effective_epsilon_scale: {payload['attack']['effective_epsilon_scale']}",
+            f"- step_size: {attack_config.resolved_step_size()}",
+            f"- steps: {attack_config.steps}",
+            f"- attack_backward_mode: {payload['attack']['attack_backward_mode']}",
+            f"- num_restarts: {payload['attack']['num_restarts']}",
+            f"- eot_iters: {payload['attack']['eot_iters']}",
+            f"- sample_wise_worst_case_over_restarts: {payload['attack']['sample_wise_worst_case_over_restarts']}",
+            f"- restart_selection: {payload['attack']['restart_selection'] or '<single-run>'}",
+            f"- selected_restart_histogram: {payload['attack']['selected_restart_histogram']}",
+            f"- restart_mean_score_by_restart: {payload['attack']['restart_mean_score_by_restart']}",
             f"- source: {case['source']['model_id']}",
             f"- processed_samples: {processed_samples}",
             "",

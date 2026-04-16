@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -p gpu
 #SBATCH --job-name=voc_attack_launch
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/slurm-%x-%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
@@ -11,13 +11,20 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 FEISHU_CONFIG="${HOME}/.feishu/config.json"
 FEISHU_BRIDGE="${FEISHU_BRIDGE:-${HOME}/tools/feishu/interactive_bridge.py}"
 
 SEARCH_ROOT="${SEARCH_ROOT:?SEARCH_ROOT is required}"
 SUITE_ROOT="${SUITE_ROOT:?SUITE_ROOT is required}"
 DATASET_ROOT="${DATASET_ROOT:-datasets}"
+PGD_CONFIG="${PGD_CONFIG:-configs/attacks/pgd.yaml}"
+SEGPGD_CONFIG="${SEGPGD_CONFIG:-configs/attacks/segpgd.yaml}"
+EPSILON_SCALE="${EPSILON_SCALE:-1.0}"
+EPSILON_RADIUS_255="${EPSILON_RADIUS_255:-}"
+ATTACK_BACKWARD_MODE="${ATTACK_BACKWARD_MODE:-default}"
+NUM_RESTARTS="${NUM_RESTARTS:-1}"
+EOT_ITERS="${EOT_ITERS:-1}"
 
 feishu_notify() {
   local text="$1"
@@ -65,10 +72,22 @@ python scripts/materialize_voc_attack_suite_manifest.py \
   --search-root "${SEARCH_ROOT}" \
   --output-dir "${SUITE_ROOT}"
 
-python scripts/launch_voc_attack_suite.py \
-  --manifest "${SUITE_ROOT}/attack_suite_manifest.json" \
-  --suite-root "${SUITE_ROOT}" \
+launch_args=(
+  --manifest "${SUITE_ROOT}/attack_suite_manifest.json"
+  --suite-root "${SUITE_ROOT}"
   --dataset-root "${DATASET_ROOT}"
+  --pgd-config "${PGD_CONFIG}"
+  --segpgd-config "${SEGPGD_CONFIG}"
+  --epsilon-scale "${EPSILON_SCALE}"
+  --attack-backward-mode "${ATTACK_BACKWARD_MODE}"
+  --num-restarts "${NUM_RESTARTS}"
+  --eot-iters "${EOT_ITERS}"
+)
+if [[ -n "${EPSILON_RADIUS_255}" ]]; then
+  launch_args+=(--epsilon-radius-255 "${EPSILON_RADIUS_255}")
+fi
+
+python scripts/launch_voc_attack_suite.py "${launch_args[@]}"
 
 feishu_notify "${SLURM_JOB_ID:-nojob}:done attack-suite launcher suite_root=${SUITE_ROOT}"
 status_flag="done"

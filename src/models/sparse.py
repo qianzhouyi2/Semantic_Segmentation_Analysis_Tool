@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import types
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 import torch
 import torch.nn as nn
@@ -25,6 +26,7 @@ SPARSE_DEFENSE_CHOICES = (
     "dir_extra_sparse",
     "margin_extra_sparse",
 )
+SPARSE_ATTACK_BACKWARD_MODE_CHOICES = ("default", "bpda_ste")
 POSTSPARSE_VARIANTS = {
     "cc_extra_sparse",
     "dir_extra_sparse",
@@ -963,6 +965,32 @@ def iter_extrasparse_modules(model: nn.Module) -> Iterable[nn.Module]:
 
 def iter_postsparse_modules(model: nn.Module) -> Iterable[nn.Module]:
     yield from iter_sparse_modules(model, POSTSPARSE_LAYER_TYPES)
+
+
+def set_attack_backward_mode(model: nn.Module, mode: str) -> int:
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode not in SPARSE_ATTACK_BACKWARD_MODE_CHOICES:
+        raise ValueError(
+            f"Unsupported sparse attack backward mode `{normalized_mode}`. "
+            f"Expected one of {SPARSE_ATTACK_BACKWARD_MODE_CHOICES}."
+        )
+
+    configured = 0
+    for module in iter_sparse_modules(model):
+        module.attack_backward_mode = normalized_mode
+        configured += 1
+    return configured
+
+
+@contextmanager
+def use_attack_backward_mode(model: nn.Module, mode: str) -> Iterator[int]:
+    snapshot = [(module, str(getattr(module, "attack_backward_mode", "default"))) for module in iter_sparse_modules(model)]
+    configured = set_attack_backward_mode(model, mode)
+    try:
+        yield configured
+    finally:
+        for module, previous_mode in snapshot:
+            module.attack_backward_mode = previous_mode
 
 
 def _add_sparse_layer(

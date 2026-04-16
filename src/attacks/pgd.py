@@ -27,6 +27,23 @@ class PGDAttack(SegmentationAttack):
             ignore_index=self.config.ignore_index,
         )
 
+    def _objective(
+        self,
+        attack_input: torch.Tensor,
+        targets: torch.Tensor,
+        step_index: int,
+        total_steps: int,
+        direction: float,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        logits = self.model.logits(attack_input)
+        loss = self.compute_attack_loss(
+            logits=logits,
+            targets=targets,
+            step_index=step_index,
+            total_steps=total_steps,
+        )
+        return direction * loss, {"loss": float(loss.detach().cpu().item())}
+
     def run(self, images: torch.Tensor, targets: torch.Tensor) -> AttackOutput:
         epsilon = self.config.epsilon
         step_size = self.config.resolved_step_size()
@@ -50,16 +67,16 @@ class PGDAttack(SegmentationAttack):
         direction = -1.0 if self.config.targeted else 1.0
         with torch.enable_grad():
             for step_index in range(steps):
-                adversarial = adversarial.detach().requires_grad_(True)
-                logits = self.model.logits(adversarial)
-                loss = self.compute_attack_loss(
-                    logits=logits,
-                    targets=labels,
-                    step_index=step_index,
-                    total_steps=steps,
+                gradient, stats = self.estimate_input_gradient(
+                    adversarial,
+                    lambda attack_input: self._objective(
+                        attack_input=attack_input,
+                        targets=labels,
+                        step_index=step_index,
+                        total_steps=steps,
+                        direction=direction,
+                    ),
                 )
-                objective = direction * loss
-                gradient = torch.autograd.grad(objective, adversarial, retain_graph=False, create_graph=False)[0]
                 adversarial = adversarial.detach() + step_size * gradient.sign()
                 adversarial = project_linf(
                     adversarial_images=adversarial,
@@ -68,7 +85,7 @@ class PGDAttack(SegmentationAttack):
                     min_value=self.config.clamp_min,
                     max_value=self.config.clamp_max,
                 )
-                loss_value = float(loss.detach().cpu().item())
+                loss_value = float(stats["loss"]) if isinstance(stats, dict) else float(stats)
 
         perturbation = adversarial - clean
         return AttackOutput(

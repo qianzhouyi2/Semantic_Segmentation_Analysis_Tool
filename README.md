@@ -2,7 +2,6 @@
 
 一个面向语义分割实验的本地分析与鲁棒性评测工具箱。仓库围绕 Pascal VOC 和通用 mask 数据，覆盖数据集体检、离线预测评估、VOC clean 验证集评测、白盒攻击、黑盒迁移攻击、稀疏防御校准、Slurm 批量协议，以及 Streamlit 交互可视化。
 
-当前仓库已经不是最初的 MVP 骨架，更接近一个可直接复用的研究分析工具链：可以从数据检查一路跑到 clean / adv / transfer / sparse 汇总，并统一导出 `json`、`csv`、`md` 结果。
 
 ## 功能概览
 
@@ -53,7 +52,7 @@
 - `dir_extra_sparse`
 - `margin_extra_sparse`
 
-当前自动化阈值搜索脚本直接支持 `meansparse` 和 `extrasparse`。防御配置位于 `configs/defenses/`，统计 sidecar 默认放在 `models/defenses/`。
+这 5 个 sparse 变体现在都能走 sidecar 准备、threshold sweep、config materialization、attack suite manifest 和 transfer manifest。阈值搜索会优先扫 `threshold`，postsparse 变体可通过模板 YAML 继承 `direction_mode`、`lambda_mix`、`alpha0`、`alpha0_mode`、`beta`、`beta_scale`、`tau`、`strict_stats`。防御配置位于 `configs/defenses/`，统计 sidecar 默认放在 `models/defenses/`。
 
 ## 项目结构
 
@@ -84,7 +83,7 @@
 └── results/                             # 评测输出目录
 ```
 
-所有命令都应从仓库根目录运行，这样 `scripts/_bootstrap.py` 才能正确注入项目路径。
+所有命令都应从仓库根目录运行，这样 `scripts/_bootstrap.py` 才能正确注入项目路径。核心 CLI 也支持从仓库根目录用 `python -m scripts.<name> --help` 做模块方式检查。
 
 ## 环境准备
 
@@ -234,6 +233,48 @@ results/reports/voc_adv_eval/<checkpoint_stem>_<attack_name>/
 - `max_linf`
 - `mean_l2`
 
+自适应白盒 sparse defense 评测现在也支持：
+
+- `--attack-backward-mode {default,bpda_ste}`：对 sparse modules 启用 BPDA/STE backward。
+- `--num-restarts N`：sample-wise worst-case restart 选择。
+- `--eot-iters N`：重复 forward/backward 的基础版 EOT。
+- `--epsilon-radius-255 2`：直接指定 `2/255` 这类绝对 budget。
+- `--epsilon-radius-255-sweep 2 4 8`：一次命令完成 budget sweep，并在根目录输出汇总 `budget_sweep_summary.json/csv/md`。
+
+例如，针对 sparse defense 做更强的 adaptive PGD：
+
+```bash
+python scripts/run_attack.py \
+  --attack-config configs/attacks/pgd_adaptive_sparse_strong.yaml \
+  --family upernet_convnext \
+  --checkpoint models/UperNet_ConvNext_T_VOC_clean.pth \
+  --defense-config configs/defenses/meansparse_example.yaml \
+  --epsilon-radius-255 4 \
+  --dataset-root datasets
+```
+
+如果要直接扫 `2/255, 4/255, 8/255`：
+
+```bash
+python scripts/run_attack.py \
+  --attack-config configs/attacks/pgd_adaptive_sparse_strong.yaml \
+  --family upernet_convnext \
+  --checkpoint models/UperNet_ConvNext_T_VOC_clean.pth \
+  --defense-config configs/defenses/meansparse_example.yaml \
+  --epsilon-radius-255-sweep 2 4 8 \
+  --dataset-root datasets
+```
+
+如果要提交到 Slurm，可直接复用：
+
+```bash
+FAMILY=upernet_convnext \
+CHECKPOINT=models/UperNet_ConvNext_T_VOC_clean.pth \
+DEFENSE_CONFIG=configs/defenses/meansparse_example.yaml \
+OUTPUT_DIR=results/reports/voc_adaptive_whitebox/convnext_meansparse \
+sbatch scripts/submit_voc_adaptive_whitebox_eval.sbatch
+```
+
 ### 6. 对比 clean 与 adversarial 结果
 
 ```bash
@@ -255,7 +296,7 @@ python scripts/prepare_sparse_defense.py \
   --dataset-root datasets
 ```
 
-再在指定 split 上做 clean / PGD 联合阈值搜索：
+再在指定 split 上做 clean / PGD 联合阈值搜索。`meansparse` / `extrasparse` 直接扫阈值，postsparse 变体额外用 `--defense-template-config` 继承模板参数：
 
 ```bash
 python scripts/search_sparse_thresholds.py \
@@ -268,11 +309,31 @@ python scripts/search_sparse_thresholds.py \
   --output-dir results/reports/sparse_search/UperNet_ConvNext_T_VOC_clean_meansparse
 ```
 
+```bash
+python scripts/search_sparse_thresholds.py \
+  --family upernet_convnext \
+  --checkpoint models/UperNet_ConvNext_T_VOC_clean.pth \
+  --variant dir_extra_sparse \
+  --stats-path models/defenses/dir_extra_sparse/UperNet_ConvNext_T_VOC_clean_dir_extra_sparse_train.pt \
+  --defense-template-config configs/defenses/dir_extra_sparse_example.yaml \
+  --dataset-root datasets \
+  --dataset-split train \
+  --output-dir results/reports/sparse_search/UperNet_ConvNext_T_VOC_clean/dir_extra_sparse
+```
+
 搜索会输出：
 
 - `search_summary.json`
 - `search_summary.md`
 - 每个阈值的 clean / PGD 结果子目录
+- `defense_template_config`
+- `effective_defense_config`
+- `variant_hyperparameters`
+
+后续通过 `python scripts/materialize_sparse_defense_configs.py --search-root ...` 生成的 YAML 会保留：
+
+- 通用字段：`name`、`family`、`threshold`、`stats_path`、`strict_stats`
+- postsparse 额外字段：`direction_mode`、`lambda_mix`、`alpha0`、`alpha0_mode`、`beta`、`beta_scale`、`tau`
 
 ### 8. 运行黑盒迁移攻击评测
 
@@ -317,6 +378,31 @@ python scripts/evaluate_all_voc_clean_models.py \
 - strict transfer protocol：`materialize_voc_transfer_protocol_manifest.py` -> `launch_voc_transfer_protocol.py` -> `summarize_voc_transfer_protocol.py`
 - full all-attacks suite：`launch_voc_all_attacks.py` -> `summarize_voc_all_attacks.py`
 
+attack suite 和 strict transfer protocol 现在也支持把 adaptive white-box protocol 往下传到批量任务，例如：
+
+```bash
+python scripts/launch_voc_attack_suite.py \
+  --manifest results/reports/voc_attack_suite_manifest/attack_suite_manifest.json \
+  --suite-root results/reports/voc_attack_suite_adaptive \
+  --dataset-root datasets \
+  --pgd-config configs/attacks/pgd_adaptive_sparse_strong.yaml \
+  --segpgd-config configs/attacks/segpgd_adaptive_sparse_strong.yaml \
+  --epsilon-radius-255 8 \
+  --attack-backward-mode bpda_ste \
+  --num-restarts 5 \
+  --eot-iters 4
+```
+
+```bash
+EPSILON_RADIUS_255=8 \
+ATTACK_BACKWARD_MODE=bpda_ste \
+NUM_RESTARTS=5 \
+EOT_ITERS=4 \
+PGD_CONFIG=configs/attacks/pgd_adaptive_sparse_strong.yaml \
+SEGPGD_CONFIG=configs/attacks/segpgd_adaptive_sparse_strong.yaml \
+sbatch scripts/submit_voc_attack_suite_after_thresholds.sbatch
+```
+
 如果只是做单次 clean 评测，也可以直接提交：
 
 ```bash
@@ -338,6 +424,59 @@ sbatch scripts/submit_voc_clean_eval.sbatch
 - `48G` 内存
 - `8 小时`
 
+如果要批量跑 VOC train split 上的 sparse threshold search，可直接提交：
+
+```bash
+sbatch scripts/submit_search_voc_train_all_sparse_cases.sh
+```
+
+如果你希望先把缺失 sidecar 全部准备好，再自动接着提交 threshold search，可直接用联动脚本：
+
+```bash
+scripts/submit_prepare_and_search_voc_train_all_sparse_cases.sh
+```
+
+这个联动脚本现在按 `(checkpoint, variant)` 细粒度提交 prepare job 和 search job，search 只依赖对应 case 的 prepare，所以能比“先全部 prepare，再全部 search”的串行阶段式流程更好地占满多张 GPU。
+
+默认会对 6 个 VOC base model 的 5 个 sparse 变体分别准备 sidecar 并做 threshold search，也支持用环境变量覆盖：
+
+```bash
+RESULTS_ROOT=results/reports/voc_train_threshold_search_all \
+DATASET_ROOT=datasets \
+DATASET_SPLIT=train \
+THRESHOLDS="0.05 0.10 0.15 0.20 0.25" \
+VARIANTS="meansparse extrasparse dir_extra_sparse" \
+sbatch scripts/submit_search_voc_train_all_sparse_cases.sh
+```
+
+联动脚本也支持同样的变量；其中 `OUTPUT_ROOT` 控制 sidecar 输出目录，`RESULTS_ROOT` 控制 threshold search 结果目录：
+
+```bash
+OUTPUT_ROOT=models/defenses \
+RESULTS_ROOT=results/reports/voc_train_threshold_search_all \
+DATASET_ROOT=datasets \
+DATASET_SPLIT=train \
+THRESHOLDS="0.05 0.10 0.15 0.20 0.25" \
+VARIANTS="cc_extra_sparse dir_extra_sparse margin_extra_sparse" \
+scripts/submit_prepare_and_search_voc_train_all_sparse_cases.sh
+```
+
+`materialize_voc_attack_suite_manifest.py` 和 `materialize_voc_transfer_protocol_manifest.py` 默认仍保持 `meansparse,extrasparse` 的兼容行为；如需扩展到全部 sparse 变体，可显式传入：
+
+```bash
+python scripts/materialize_voc_attack_suite_manifest.py \
+  --search-root results/reports/sparse_search \
+  --output-dir results/reports/voc_attack_suite_manifest \
+  --variants all
+```
+
+```bash
+python scripts/materialize_voc_transfer_protocol_manifest.py \
+  --search-root results/reports/sparse_search \
+  --output-dir results/reports/voc_transfer_protocol_manifest \
+  --variants all
+```
+
 ## 输出目录约定
 
 常见输出位置如下：
@@ -351,6 +490,9 @@ sbatch scripts/submit_voc_clean_eval.sbatch
 - `results/reports/sparse_search/`
 - `results/reports/comparison/`
 - `results/reports/robustness_comparison/`
+- `results/reports/voc_attack_suite/`
+- `results/reports/voc_transfer_protocol/`
+- `results/reports/voc_all_attacks/`
 
 当前仓库的导出器会自动创建父目录，因此大多数脚本可以直接写入新的结果路径。
 

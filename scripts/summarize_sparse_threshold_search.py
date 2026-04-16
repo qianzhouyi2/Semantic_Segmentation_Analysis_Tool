@@ -50,6 +50,8 @@ def main() -> None:
                 "best_threshold": float(best["threshold"]),
                 "clean_miou": None if best["clean_miou"] is None else float(best["clean_miou"]),
                 "adv_miou": float(best["adv_miou"]),
+                "defense_template_config": payload.get("defense_template_config"),
+                "variant_hyperparameters": payload.get("variant_hyperparameters", {}),
                 "search_summary": repo_relative_path(summary_path, repo_root),
             }
         )

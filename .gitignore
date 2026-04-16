@@ -9,6 +9,7 @@ models/defenses/
 /datasets
 AGENTS.md
 gpt_pro_advice
+docs/
 
 # Python
 __pycache__/
@@ -39,3 +40,9 @@ results/reports/*
 
 # Local logs
 logs/
+*.log
+
+# Local temporary scripts
+scripts/local/
+scripts/tmp_*.sbatch
+scripts/local_*.sbatch

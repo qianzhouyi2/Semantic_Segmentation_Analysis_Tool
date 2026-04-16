@@ -13,6 +13,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", required=True, help="attack_suite_manifest.json path.")
     parser.add_argument("--suite-root", required=True, help="Output root for the attack suite.")
     parser.add_argument("--dataset-root", default="datasets", help="VOC dataset root.")
+    parser.add_argument("--pgd-config", default="configs/attacks/pgd.yaml", help="PGD YAML used for white-box suite jobs.")
+    parser.add_argument(
+        "--segpgd-config",
+        default="configs/attacks/segpgd.yaml",
+        help="SegPGD YAML used for white-box suite jobs.",
+    )
+    parser.add_argument("--epsilon-scale", type=float, default=1.0, help="Optional multiplicative Linf budget scale.")
+    parser.add_argument(
+        "--epsilon-radius-255",
+        type=float,
+        default=None,
+        help="Optional absolute Linf budget override in 255-space passed to attack scripts.",
+    )
+    parser.add_argument(
+        "--attack-backward-mode",
+        default="default",
+        choices=("default", "bpda_ste"),
+        help="Backward mode forwarded to white-box and transfer attack jobs.",
+    )
+    parser.add_argument(
+        "--num-restarts",
+        type=int,
+        default=1,
+        help="Restart count forwarded to white-box and transfer attack jobs.",
+    )
+    parser.add_argument(
+        "--eot-iters",
+        type=int,
+        default=1,
+        help="EOT gradient averaging count forwarded to white-box and transfer attack jobs.",
+    )
     return parser.parse_args()
 
 
@@ -28,6 +59,24 @@ def submit(command: list[str]) -> int:
     return int(stdout.split()[-1])
 
 
+def append_attack_protocol_exports(
+    export_items: list[str],
+    *,
+    epsilon_scale: float = 1.0,
+    epsilon_radius_255: float | None = None,
+    attack_backward_mode: str = "default",
+    num_restarts: int = 1,
+    eot_iters: int = 1,
+) -> list[str]:
+    export_items.append(f"EPSILON_SCALE={epsilon_scale}")
+    if epsilon_radius_255 is not None:
+        export_items.append(f"EPSILON_RADIUS_255={epsilon_radius_255}")
+    export_items.append(f"ATTACK_BACKWARD_MODE={attack_backward_mode}")
+    export_items.append(f"NUM_RESTARTS={num_restarts}")
+    export_items.append(f"EOT_ITERS={eot_iters}")
+    return export_items
+
+
 def submit_eval_case(
     *,
     mode: str,
@@ -36,6 +85,11 @@ def submit_eval_case(
     dataset_root: str,
     attack_config: str | None = None,
     batch_size: int = 4,
+    epsilon_scale: float = 1.0,
+    epsilon_radius_255: float | None = None,
+    attack_backward_mode: str = "default",
+    num_restarts: int = 1,
+    eot_iters: int = 1,
 ) -> int:
     export_items = [
         "ALL",
@@ -53,6 +107,14 @@ def submit_eval_case(
         export_items.append(f"DEFENSE_CONFIG={model['defense_config']}")
     if attack_config is not None:
         export_items.append(f"ATTACK_CONFIG={attack_config}")
+        append_attack_protocol_exports(
+            export_items,
+            epsilon_scale=epsilon_scale,
+            epsilon_radius_255=epsilon_radius_255,
+            attack_backward_mode=attack_backward_mode,
+            num_restarts=num_restarts,
+            eot_iters=eot_iters,
+        )
     return submit(
         [
             "sbatch",
@@ -69,6 +131,11 @@ def submit_transfer_case(
     target_model: dict,
     output_dir: Path,
     dataset_root: str,
+    epsilon_scale: float = 1.0,
+    epsilon_radius_255: float | None = None,
+    attack_backward_mode: str = "default",
+    num_restarts: int = 1,
+    eot_iters: int = 1,
 ) -> int:
     export_items = [
         "ALL",
@@ -85,6 +152,14 @@ def submit_transfer_case(
         "BATCH_SIZE=1",
         "DEVICE=cuda",
     ]
+    append_attack_protocol_exports(
+        export_items,
+        epsilon_scale=epsilon_scale,
+        epsilon_radius_255=epsilon_radius_255,
+        attack_backward_mode=attack_backward_mode,
+        num_restarts=num_restarts,
+        eot_iters=eot_iters,
+    )
     if source_model["defense_config"]:
         export_items.append(f"SOURCE_DEFENSE_CONFIG={source_model['defense_config']}")
     if target_model["defense_config"]:
@@ -128,8 +203,13 @@ def main() -> None:
                     model=model,
                     output_dir=pgd_output,
                     dataset_root=args.dataset_root,
-                    attack_config="configs/attacks/pgd.yaml",
+                    attack_config=args.pgd_config,
                     batch_size=2,
+                    epsilon_scale=args.epsilon_scale,
+                    epsilon_radius_255=args.epsilon_radius_255,
+                    attack_backward_mode=args.attack_backward_mode,
+                    num_restarts=args.num_restarts,
+                    eot_iters=args.eot_iters,
                 )
             )
 
@@ -140,8 +220,13 @@ def main() -> None:
                 model=model,
                 output_dir=segpgd_output,
                 dataset_root=args.dataset_root,
-                attack_config="configs/attacks/segpgd.yaml",
+                attack_config=args.segpgd_config,
                 batch_size=2,
+                epsilon_scale=args.epsilon_scale,
+                epsilon_radius_255=args.epsilon_radius_255,
+                attack_backward_mode=args.attack_backward_mode,
+                num_restarts=args.num_restarts,
+                eot_iters=args.eot_iters,
             )
         )
 
@@ -155,6 +240,11 @@ def main() -> None:
                 target_model=model,
                 output_dir=mi_output,
                 dataset_root=args.dataset_root,
+                epsilon_scale=args.epsilon_scale,
+                epsilon_radius_255=args.epsilon_radius_255,
+                attack_backward_mode=args.attack_backward_mode,
+                num_restarts=args.num_restarts,
+                eot_iters=args.eot_iters,
             )
         )
         job_ids.append(
@@ -164,6 +254,11 @@ def main() -> None:
                 target_model=model,
                 output_dir=niditi_output,
                 dataset_root=args.dataset_root,
+                epsilon_scale=args.epsilon_scale,
+                epsilon_radius_255=args.epsilon_radius_255,
+                attack_backward_mode=args.attack_backward_mode,
+                num_restarts=args.num_restarts,
+                eot_iters=args.eot_iters,
             )
         )
 

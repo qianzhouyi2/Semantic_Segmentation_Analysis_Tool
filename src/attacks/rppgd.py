@@ -172,6 +172,38 @@ class RPPGDAttack(SegmentationAttack):
             "intra_loss": float(intra_loss.detach().cpu().item()),
         }
 
+    def _objective(
+        self,
+        attack_input: torch.Tensor,
+        *,
+        labels: torch.Tensor,
+        state: torch.Tensor,
+        step_index: int,
+        total_steps: int,
+        direction: float,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        logits, features = self.model.forward_with_features(attack_input)
+        prediction = logits.argmax(dim=1)
+        region_loss, _, _ = self._compute_region_loss(
+            logits=logits,
+            targets=labels,
+            state=state,
+            step_index=step_index,
+            total_steps=total_steps,
+        )
+        feature_map = self._prepare_feature_map(features, target_size=tuple(labels.shape[-2:]))
+        inter_loss, intra_loss, _ = self._compute_prototype_losses(
+            feature_map=feature_map,
+            predicted_labels=prediction,
+            state=state,
+        )
+        total_loss = (
+            self.region_weight() * region_loss
+            + self.inter_weight() * inter_loss
+            + self.intra_weight() * intra_loss
+        )
+        return direction * total_loss, {"loss": float(total_loss.detach().cpu().item())}
+
     def run(self, images: torch.Tensor, targets: torch.Tensor) -> AttackOutput:
         clean = images.detach().clone().to(self.model.device)
         labels = targets.detach().clone().to(self.model.device)
@@ -211,11 +243,25 @@ class RPPGDAttack(SegmentationAttack):
 
         with torch.enable_grad():
             for step_index in range(steps):
-                adversarial = adversarial.detach().requires_grad_(True)
-                logits, features = self.model.forward_with_features(adversarial)
-                prediction = logits.argmax(dim=1)
+                with torch.no_grad():
+                    logits = self.model.logits(adversarial)
+                    prediction = logits.argmax(dim=1)
                 state[(prediction != labels) & (state == self.STATE_TRUE) & valid_mask] = self.STATE_BOUNDARY
 
+                gradient, stats = self.estimate_input_gradient(
+                    adversarial,
+                    lambda attack_input: self._objective(
+                        attack_input=attack_input,
+                        labels=labels,
+                        state=state,
+                        step_index=step_index,
+                        total_steps=steps,
+                        direction=direction,
+                    ),
+                )
+                with torch.no_grad():
+                    logits, features = self.model.forward_with_features(adversarial.detach())
+                    prediction = logits.argmax(dim=1)
                 region_loss, last_region_stats, last_region_counts = self._compute_region_loss(
                     logits=logits,
                     targets=labels,
@@ -234,8 +280,6 @@ class RPPGDAttack(SegmentationAttack):
                     + self.inter_weight() * inter_loss
                     + self.intra_weight() * intra_loss
                 )
-                objective = direction * total_loss
-                gradient = torch.autograd.grad(objective, adversarial, retain_graph=False, create_graph=False)[0]
                 adversarial = adversarial.detach() + step_size * gradient.sign()
                 adversarial = project_linf(
                     adversarial_images=adversarial,
@@ -244,7 +288,10 @@ class RPPGDAttack(SegmentationAttack):
                     min_value=self.config.clamp_min,
                     max_value=self.config.clamp_max,
                 )
-                last_total_loss = float(total_loss.detach().cpu().item())
+                if isinstance(stats, dict):
+                    last_total_loss = float(stats["loss"])
+                else:
+                    last_total_loss = float(total_loss.detach().cpu().item())
 
         with torch.no_grad():
             final_logits = self.model.logits(adversarial)

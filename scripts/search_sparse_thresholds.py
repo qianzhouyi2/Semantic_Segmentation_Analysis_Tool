@@ -12,9 +12,19 @@ from torch.utils.data import DataLoader
 from src.attacks import AttackConfig
 from src.common import setup_logger
 from src.common.config import load_yaml
+from src.common.sparse_workflow import (
+    extract_variant_hyperparameters,
+    resolve_sparse_defense_config,
+    serialize_sparse_defense_config,
+)
 from src.datasets import PASCAL_VOC_CLASS_NAMES, PascalVOCValidationDataset
 from src.evaluation import evaluate_adversarial_segmentation_model, evaluate_segmentation_model
-from src.models import MODEL_FAMILY_CHOICES, TorchSegmentationModelAdapter, build_model_from_checkpoint
+from src.models import (
+    MODEL_FAMILY_CHOICES,
+    SPARSE_DEFENSE_CHOICES,
+    TorchSegmentationModelAdapter,
+    build_model_from_checkpoint,
+)
 from src.reporting.exporter import write_json, write_markdown
 
 
@@ -22,8 +32,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Search sparse-defense thresholds on a VOC split.")
     parser.add_argument("--family", required=True, choices=MODEL_FAMILY_CHOICES, help="Model family.")
     parser.add_argument("--checkpoint", required=True, help="Base checkpoint path.")
-    parser.add_argument("--variant", required=True, choices=("meansparse", "extrasparse"), help="Sparse variant.")
+    parser.add_argument("--variant", required=True, choices=SPARSE_DEFENSE_CHOICES, help="Sparse variant.")
     parser.add_argument("--stats-path", required=True, help="Prepared sparse sidecar path.")
+    parser.add_argument(
+        "--defense-template-config",
+        default="",
+        help="Optional sparse defense YAML template. Search overrides threshold and stats_path while inheriting the other parameters.",
+    )
     parser.add_argument("--attack-config", default="configs/attacks/pgd.yaml", help="Attack config YAML for search.")
     parser.add_argument("--dataset-root", default="datasets", help="VOC dataset root.")
     parser.add_argument("--dataset-split", default="train", help="VOC split file under ImageSets/Segmentation.")
@@ -77,13 +92,33 @@ def build_dataloader(
     return dataset, dataloader
 
 
+def build_effective_defense_config(
+    *,
+    family: str,
+    variant: str,
+    threshold: float,
+    stats_path: Path,
+    defense_template_config: Path | None,
+) -> tuple[dict, dict]:
+    config = resolve_sparse_defense_config(
+        variant=variant,
+        family=family,
+        threshold=threshold,
+        stats_path=stats_path,
+        template_config_path=defense_template_config,
+    )
+    return (
+        serialize_sparse_defense_config(config, include_variant_alias=True),
+        extract_variant_hyperparameters(config),
+    )
+
+
 def evaluate_threshold(
     *,
     family: str,
     checkpoint_path: Path,
-    variant: str,
-    stats_path: Path,
-    threshold: float,
+    defense_config: dict,
+    variant_hyperparameters: dict,
     attack_config: AttackConfig,
     dataset_root: str,
     dataset_split: str,
@@ -96,11 +131,6 @@ def evaluate_threshold(
     max_batches: int,
     logger,
 ) -> tuple[dict, dict]:
-    defense_config = {
-        "variant": variant,
-        "stats_path": str(stats_path),
-        "threshold": threshold,
-    }
     model, missing_keys, unexpected_keys = build_model_from_checkpoint(
         family=family,
         checkpoint_path=checkpoint_path,
@@ -150,9 +180,11 @@ def evaluate_threshold(
     metadata = {
         "family": family,
         "checkpoint": str(checkpoint_path.resolve()),
-        "variant": variant,
-        "stats_path": str(stats_path.resolve()),
-        "threshold": threshold,
+        "variant": str(defense_config["variant"]),
+        "stats_path": str(defense_config["stats_path"]),
+        "threshold": float(defense_config["threshold"]),
+        "defense_config": defense_config,
+        "variant_hyperparameters": variant_hyperparameters,
         "missing_keys": missing_keys,
         "unexpected_keys": unexpected_keys,
         "sparse_defense": sparse_info,
@@ -231,14 +263,16 @@ def main() -> None:
     )
     device = torch.device(args.device if args.device.startswith("cuda") and torch.cuda.is_available() else "cpu")
     attack_config = load_attack_config(args.attack_config)
+    defense_template_config = None if not args.defense_template_config else Path(args.defense_template_config)
 
     logger.info(
-        "Starting threshold search: family=%s checkpoint=%s variant=%s split=%s stats=%s thresholds=%s device=%s",
+        "Starting threshold search: family=%s checkpoint=%s variant=%s split=%s stats=%s template=%s thresholds=%s device=%s",
         args.family,
         checkpoint_path.resolve(),
         args.variant,
         args.dataset_split,
         stats_path.resolve(),
+        None if defense_template_config is None else defense_template_config.resolve(),
         thresholds,
         device,
     )
@@ -246,21 +280,23 @@ def main() -> None:
     rows: list[dict] = []
     for threshold in thresholds:
         logger.info("Evaluating threshold=%.4f", threshold)
+        effective_defense_config, variant_hyperparameters = build_effective_defense_config(
+            family=args.family,
+            variant=args.variant,
+            threshold=threshold,
+            stats_path=stats_path,
+            defense_template_config=defense_template_config,
+        )
         clean_payload = None
         adv_payload = None
         if args.skip_clean:
-            defense_config = {
-                "variant": args.variant,
-                "stats_path": str(stats_path),
-                "threshold": threshold,
-            }
             model, missing_keys, unexpected_keys = build_model_from_checkpoint(
                 family=args.family,
                 checkpoint_path=checkpoint_path,
                 num_classes=args.num_classes,
                 map_location="cpu",
                 strict=args.strict,
-                defense_config=defense_config,
+                defense_config=effective_defense_config,
             )
             sparse_info = getattr(model, "_sparse_defense_info", None)
             _, adv_loader = build_dataloader(
@@ -287,6 +323,8 @@ def main() -> None:
                     "variant": args.variant,
                     "stats_path": str(stats_path.resolve()),
                     "threshold": threshold,
+                    "defense_config": effective_defense_config,
+                    "variant_hyperparameters": variant_hyperparameters,
                     "missing_keys": missing_keys,
                     "unexpected_keys": unexpected_keys,
                     "sparse_defense": sparse_info,
@@ -298,9 +336,8 @@ def main() -> None:
             clean_payload, adv_payload = evaluate_threshold(
                 family=args.family,
                 checkpoint_path=checkpoint_path,
-                variant=args.variant,
-                stats_path=stats_path,
-                threshold=threshold,
+                defense_config=effective_defense_config,
+                variant_hyperparameters=variant_hyperparameters,
                 attack_config=attack_config,
                 dataset_root=args.dataset_root,
                 dataset_split=args.dataset_split,
@@ -331,6 +368,8 @@ def main() -> None:
                 "adv_aacc": float(adv_payload["reference_percent"]["aAcc"]),
                 "clean_results": None if clean_payload is None else str((clean_dir / "results.json").resolve()),
                 "adv_results": str((adv_dir / "results.json").resolve()),
+                "effective_defense_config": effective_defense_config,
+                "variant_hyperparameters": variant_hyperparameters,
             }
         )
 
@@ -340,6 +379,11 @@ def main() -> None:
         "checkpoint": str(checkpoint_path.resolve()),
         "variant": args.variant,
         "stats_path": str(stats_path.resolve()),
+        "defense_template_config": (
+            None if defense_template_config is None else str(defense_template_config.resolve())
+        ),
+        "effective_defense_config": best["effective_defense_config"],
+        "variant_hyperparameters": best["variant_hyperparameters"],
         "dataset": {
             "root": str(Path(args.dataset_root).resolve()),
             "split": args.dataset_split,
@@ -364,6 +408,11 @@ def main() -> None:
             f"- checkpoint: {checkpoint_path.resolve()}",
             f"- variant: {args.variant}",
             f"- stats_path: {stats_path.resolve()}",
+            (
+                "- defense_template_config: -"
+                if defense_template_config is None
+                else f"- defense_template_config: {defense_template_config.resolve()}"
+            ),
             f"- dataset_split: {args.dataset_split}",
             f"- attack_config: {Path(args.attack_config).resolve()}",
             f"- best_threshold: {best['threshold']:.2f}",
@@ -373,6 +422,7 @@ def main() -> None:
                 if args.skip_clean
                 else f"- best_clean_mIoU: {best['clean_miou']:.2f}"
             ),
+            f"- variant_hyperparameters: {json.dumps(best['variant_hyperparameters'], ensure_ascii=False)}",
             f"- pareto_frontier_size: {len(pareto_frontier)}",
             "",
             "## Thresholds",

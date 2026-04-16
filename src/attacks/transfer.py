@@ -53,6 +53,26 @@ class TransferIterativeAttack(SegmentationAttack):
             )
         return gradient
 
+    def _objective(
+        self,
+        attack_input: torch.Tensor,
+        *,
+        targets: torch.Tensor,
+        direction: float,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        model_input = attack_input
+        if self.use_diversity:
+            model_input = input_diversity(
+                images=attack_input,
+                resize_rate=self.resize_rate(),
+                diversity_prob=self.diversity_prob(),
+                pad_value=float(self.config.clamp_min),
+            )
+
+        logits = self.model.logits(model_input)
+        loss = self.compute_attack_loss(logits=logits, targets=targets)
+        return direction * loss, {"loss": float(loss.detach().cpu().item())}
+
     def run(self, images: torch.Tensor, targets: torch.Tensor) -> AttackOutput:
         epsilon = self.config.epsilon
         step_size = self.config.resolved_step_size()
@@ -79,20 +99,14 @@ class TransferIterativeAttack(SegmentationAttack):
                 attack_input = adversarial
                 if self.use_nesterov:
                     attack_input = attack_input + step_size * self.momentum_decay() * momentum
-                attack_input = attack_input.detach().requires_grad_(True)
-                model_input = attack_input
-                if self.use_diversity:
-                    model_input = input_diversity(
-                        images=attack_input,
-                        resize_rate=self.resize_rate(),
-                        diversity_prob=self.diversity_prob(),
-                        pad_value=float(self.config.clamp_min),
-                    )
-
-                logits = self.model.logits(model_input)
-                loss = self.compute_attack_loss(logits=logits, targets=labels)
-                objective = direction * loss
-                gradient = torch.autograd.grad(objective, attack_input, retain_graph=False, create_graph=False)[0]
+                gradient, stats = self.estimate_input_gradient(
+                    attack_input,
+                    lambda grad_input: self._objective(
+                        attack_input=grad_input,
+                        targets=labels,
+                        direction=direction,
+                    ),
+                )
                 gradient = self.postprocess_gradient(gradient)
                 if self.use_momentum:
                     gradient = normalize_gradient_by_mean_abs(gradient)
@@ -109,7 +123,7 @@ class TransferIterativeAttack(SegmentationAttack):
                     min_value=self.config.clamp_min,
                     max_value=self.config.clamp_max,
                 )
-                loss_value = float(loss.detach().cpu().item())
+                loss_value = float(stats["loss"]) if isinstance(stats, dict) else float(stats)
 
         perturbation = adversarial - clean
         return AttackOutput(

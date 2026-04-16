@@ -7,59 +7,24 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 import yaml
 
-from src.reporting.exporter import write_json, write_markdown
-
-
-BASE_MODELS = [
-    {
-        "name": "UperNet_ConvNext_T_VOC_adv",
-        "family": "upernet_convnext",
-        "checkpoint": "models/UperNet_ConvNext_T_VOC_adv.pth",
-        "regime": "adv",
-    },
-    {
-        "name": "UperNet_ConvNext_T_VOC_clean",
-        "family": "upernet_convnext",
-        "checkpoint": "models/UperNet_ConvNext_T_VOC_clean.pth",
-        "regime": "clean",
-    },
-    {
-        "name": "UperNet_ResNet50_VOC_adv",
-        "family": "upernet_resnet50",
-        "checkpoint": "models/UperNet_ResNet50_VOC_adv.pth",
-        "regime": "adv",
-    },
-    {
-        "name": "UperNet_ResNet50_VOC_clean",
-        "family": "upernet_resnet50",
-        "checkpoint": "models/UperNet_ResNet50_VOC_clean.pth",
-        "regime": "clean",
-    },
-    {
-        "name": "Segmenter_ViT_S_VOC_adv",
-        "family": "segmenter_vit_s",
-        "checkpoint": "models/Segmenter_ViT_S_VOC_adv.pth",
-        "regime": "adv",
-    },
-    {
-        "name": "Segmenter_ViT_S_VOC_clean",
-        "family": "segmenter_vit_s",
-        "checkpoint": "models/Segmenter_ViT_S_VOC_clean.pth",
-        "regime": "clean",
-    },
-]
-
-SPARSE_VARIANTS = ("meansparse", "extrasparse")
-TRANSFER_ATTACKS = (
-    {"stem": "mi_fgsm", "name": "mi-fgsm", "config": "configs/attacks/mi_fgsm.yaml"},
-    {"stem": "ni_di_ti", "name": "ni+di+ti", "config": "configs/attacks/ni_di_ti.yaml"},
+from src.common.sparse_workflow import (
+    parse_sparse_variants,
+    resolve_sparse_config_from_search_summary,
+    serialize_sparse_defense_config,
 )
+from src.common.voc_protocol import VOC_BASE_MODELS, VOC_TRANSFER_ATTACKS
+from src.reporting.exporter import write_json, write_markdown
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Materialize strict transfer-protocol experiment manifest.")
     parser.add_argument("--search-root", required=True, help="Threshold-search root with search_summary.json files.")
     parser.add_argument("--output-dir", required=True, help="Transfer-protocol output directory.")
+    parser.add_argument(
+        "--variants",
+        default="meansparse,extrasparse",
+        help="Comma or space separated sparse variants to include, or `all` for every sparse defense variant.",
+    )
     return parser.parse_args()
 
 
@@ -67,47 +32,38 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def checkpoint_name_to_model(name: str) -> dict:
-    for item in BASE_MODELS:
-        if item["name"] == name:
-            return dict(item)
-    raise KeyError(f"Unknown base model name in search summary: {name}")
-
-
-def build_sparse_config_lookup(search_root: Path, config_dir: Path) -> tuple[dict[tuple[str, str], dict], list[Path]]:
+def build_sparse_config_lookup(
+    search_root: Path,
+    config_dir: Path,
+    variants: list[str],
+) -> tuple[dict[tuple[str, str], dict], list[Path]]:
     by_key: dict[tuple[str, str], dict] = {}
     written_paths: list[Path] = []
     for summary_path in sorted(search_root.glob("*/*/search_summary.json")):
         payload = load_json(summary_path)
         checkpoint_name = Path(payload["checkpoint"]).stem
-        base_model = checkpoint_name_to_model(checkpoint_name)
         variant = str(payload["variant"])
-        threshold = float(payload["best_threshold"]["threshold"])
-        stats_path = str(payload["stats_path"])
-        config_payload = {
-            "name": variant,
-            "family": base_model["family"],
-            "threshold": threshold,
-            "stats_path": stats_path,
-            "strict_stats": True,
-        }
+        if variant not in variants:
+            continue
+        config = resolve_sparse_config_from_search_summary(payload, summary_path=summary_path)
         config_path = config_dir / f"{checkpoint_name}_{variant}.yaml"
         config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_payload = serialize_sparse_defense_config(config, relative_to=config_path.parent.resolve())
         config_path.write_text(yaml.safe_dump(config_payload, sort_keys=False), encoding="utf-8")
         written_paths.append(config_path)
         by_key[(checkpoint_name, variant)] = {
             "config_path": str(config_path.resolve()),
-            "threshold": threshold,
-            "stats_path": stats_path,
+            "threshold": float(config.threshold),
+            "stats_path": None if config.stats_path is None else str(config.stats_path.resolve()),
         }
     return by_key, written_paths
 
 
-def build_models(search_root: Path, output_dir: Path) -> tuple[list[dict], list[Path]]:
+def build_models(search_root: Path, output_dir: Path, variants: list[str]) -> tuple[list[dict], list[Path]]:
     config_dir = output_dir / "defense_configs"
-    sparse_by_key, written_configs = build_sparse_config_lookup(search_root, config_dir)
+    sparse_by_key, written_configs = build_sparse_config_lookup(search_root, config_dir, variants)
     models: list[dict] = []
-    for base_model in BASE_MODELS:
+    for base_model in VOC_BASE_MODELS:
         checkpoint_path = str((Path.cwd() / base_model["checkpoint"]).resolve())
         base_entry = {
             "model_id": f"baseline__{base_model['name']}",
@@ -120,7 +76,7 @@ def build_models(search_root: Path, output_dir: Path) -> tuple[list[dict], list[
             "threshold": None,
         }
         models.append(base_entry)
-        for variant in SPARSE_VARIANTS:
+        for variant in variants:
             sparse_info = sparse_by_key.get((base_model["name"], variant))
             if sparse_info is None:
                 raise FileNotFoundError(f"Missing threshold-search summary for {base_model['name']} {variant}")
@@ -139,16 +95,17 @@ def build_models(search_root: Path, output_dir: Path) -> tuple[list[dict], list[
     return models, written_configs
 
 
-def build_cases(models: list[dict]) -> list[dict]:
+def build_cases(models: list[dict], variants: list[str]) -> list[dict]:
     cases: list[dict] = []
     baseline_sources = [item for item in models if item["variant"] == "baseline"]
     grouped_targets: dict[tuple[str, str], list[dict]] = {}
     for item in models:
         grouped_targets.setdefault((item["display_name"], item["regime"]), []).append(item)
+    variant_order = {variant: index for index, variant in enumerate(["baseline", *variants])}
     for group in grouped_targets.values():
-        group.sort(key=lambda row: {"baseline": 0, "meansparse": 1, "extrasparse": 2}[row["variant"]])
+        group.sort(key=lambda row: variant_order[row["variant"]])
 
-    for attack in TRANSFER_ATTACKS:
+    for attack in VOC_TRANSFER_ATTACKS:
         for source in baseline_sources:
             for (display_name, regime), targets in grouped_targets.items():
                 if regime != source["regime"]:
@@ -175,15 +132,17 @@ def main() -> None:
     search_root = Path(args.search_root)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    variants = parse_sparse_variants(args.variants)
 
-    models, written_configs = build_models(search_root, output_dir)
-    cases = build_cases(models)
+    models, written_configs = build_models(search_root, output_dir, variants)
+    cases = build_cases(models, variants)
     manifest = {
         "search_root": str(search_root.resolve()),
         "output_dir": str(output_dir.resolve()),
+        "requested_sparse_variants": variants,
         "num_models": len(models),
         "num_cases": len(cases),
-        "transfer_attacks": TRANSFER_ATTACKS,
+        "transfer_attacks": VOC_TRANSFER_ATTACKS,
         "models": models,
         "cases": cases,
         "written_defense_configs": [str(path.resolve()) for path in written_configs],
@@ -195,6 +154,7 @@ def main() -> None:
         [
             f"- search_root: {search_root.resolve()}",
             f"- output_dir: {output_dir.resolve()}",
+            f"- sparse_variants: {', '.join(variants)}",
             f"- num_models: {len(models)}",
             f"- num_cases: {len(cases)}",
             "",

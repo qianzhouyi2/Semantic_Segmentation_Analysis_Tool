@@ -7,15 +7,27 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.attacks import AttackConfig, AttackRunner, CosPGDAttack, FGSMAttack, PGDAttack
+from src.attacks import (
+    AttackConfig,
+    AttackRunner,
+    CosPGDAttack,
+    FGSMAttack,
+    PGDAttack,
+    finalize_attack_runtime_aggregate,
+    init_attack_runtime_aggregate,
+    update_attack_runtime_aggregate,
+)
 from src.attacks.losses import segmentation_cospgd_loss, segmentation_segpgd_loss
+from src.evaluation.adversarial import evaluate_adversarial_segmentation_model
 from src.models.base import TorchSegmentationModelAdapter
+from src.models.sparse import MeanSparse2d
 
 
 def _build_toy_adapter() -> TorchSegmentationModelAdapter:
@@ -24,6 +36,26 @@ def _build_toy_adapter() -> TorchSegmentationModelAdapter:
         model.weight.copy_(torch.tensor([[[[4.0]]], [[[-4.0]]]]))
         model.bias.copy_(torch.tensor([-1.0, 1.0]))
     return TorchSegmentationModelAdapter(model=model, num_classes=2, device="cpu")
+
+
+class _SparseToyModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sparse = MeanSparse2d(1)
+        self.sparse.set_threshold(0.0)
+        self.head = nn.Conv2d(1, 2, kernel_size=1, bias=True)
+        self.last_seen_backward_mode: str | None = None
+        with torch.no_grad():
+            self.head.weight.copy_(torch.tensor([[[[4.0]]], [[[-4.0]]]]))
+            self.head.bias.copy_(torch.tensor([-1.0, 1.0]))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self.last_seen_backward_mode = self.sparse.attack_backward_mode
+        return self.head(self.sparse(x))
+
+
+def _build_sparse_toy_adapter() -> TorchSegmentationModelAdapter:
+    return TorchSegmentationModelAdapter(model=_SparseToyModel(), num_classes=2, device="cpu")
 
 
 class AttackConfigTest(unittest.TestCase):
@@ -63,6 +95,23 @@ class AttackConfigTest(unittest.TestCase):
         self.assertAlmostEqual(adjusted.epsilon, 4.0 / 255.0)
         self.assertAlmostEqual(adjusted.step_size or 0.0, 1.0 / 255.0)
         self.assertAlmostEqual(float(adjusted.extra["epsilon_radius_255"]), 4.0)
+
+    def test_with_runtime_overrides_prefers_absolute_radius(self) -> None:
+        config = AttackConfig(name="pgd", epsilon=8.0 / 255.0, step_size=2.0 / 255.0, steps=4)
+
+        adjusted = config.with_runtime_overrides(
+            epsilon_scale=1.5,
+            epsilon_radius_255=2.0,
+            attack_backward_mode="bpda_ste",
+            num_restarts=3,
+            eot_iters=5,
+        )
+
+        self.assertAlmostEqual(adjusted.epsilon, 2.0 / 255.0)
+        self.assertAlmostEqual(adjusted.step_size or 0.0, 0.5 / 255.0)
+        self.assertEqual(adjusted.attack_backward_mode, "bpda_ste")
+        self.assertEqual(adjusted.num_restarts, 3)
+        self.assertEqual(adjusted.eot_iters, 5)
 
 
 class PGDAttackTest(unittest.TestCase):
@@ -257,6 +306,107 @@ class AttackRegistrationTest(unittest.TestCase):
                 self.assertLessEqual(float(output.perturbation.abs().max().item()), 0.2 + 1e-6)
                 self.assertGreaterEqual(float(output.adversarial_images.min().item()), 0.0)
                 self.assertLessEqual(float(output.adversarial_images.max().item()), 1.0)
+
+
+class AttackProtocolTest(unittest.TestCase):
+    def test_runtime_aggregate_sums_restart_statistics_across_batches(self) -> None:
+        aggregate = init_attack_runtime_aggregate(AttackConfig(name="fgsm", epsilon=0.1, num_restarts=2))
+
+        update_attack_runtime_aggregate(
+            aggregate,
+            {
+                "sparse_modules_configured": 1,
+                "best_mean_score": 0.25,
+                "selected_restart_histogram": [1, 1],
+                "restart_summaries": [
+                    {"restart_index": 0, "mean_score": 0.60},
+                    {"restart_index": 1, "mean_score": 0.25},
+                ],
+            },
+            batch_size=2,
+        )
+        update_attack_runtime_aggregate(
+            aggregate,
+            {
+                "sparse_modules_configured": 1,
+                "best_mean_score": 0.10,
+                "selected_restart_histogram": [0, 1],
+                "restart_summaries": [
+                    {"restart_index": 0, "mean_score": 0.40},
+                    {"restart_index": 1, "mean_score": 0.10},
+                ],
+            },
+            batch_size=1,
+        )
+
+        summary = finalize_attack_runtime_aggregate(aggregate)
+
+        self.assertEqual(summary["runtime_batches_aggregated"], 2)
+        self.assertEqual(summary["runtime_samples_aggregated"], 3)
+        self.assertEqual(summary["selected_restart_histogram"], [1, 2])
+        self.assertEqual(summary["selected_restart_fraction"], [1.0 / 3.0, 2.0 / 3.0])
+        self.assertAlmostEqual(float(summary["best_mean_score"]), (0.25 * 2.0 + 0.10) / 3.0)
+        self.assertEqual(summary["restart_mean_score_by_restart"], [((0.60 * 2.0) + 0.40) / 3.0, ((0.25 * 2.0) + 0.10) / 3.0])
+
+    def test_runner_applies_sparse_backward_mode_temporarily(self) -> None:
+        adapter = _build_sparse_toy_adapter()
+        runner = AttackRunner(adapter)
+        images = torch.full((1, 1, 1, 1), 0.9, dtype=torch.float32)
+        targets = torch.zeros((1, 1, 1), dtype=torch.long)
+        config = AttackConfig(name="fgsm", epsilon=0.2, attack_backward_mode="bpda_ste")
+
+        self.assertEqual(adapter.model.sparse.attack_backward_mode, "default")
+
+        output = runner.run(config, images, targets)
+
+        self.assertEqual(adapter.model.last_seen_backward_mode, "bpda_ste")
+        self.assertEqual(adapter.model.sparse.attack_backward_mode, "default")
+        self.assertEqual(output.metadata["attack_backward_mode"], "bpda_ste")
+        self.assertEqual(output.metadata["sparse_modules_configured"], 1)
+
+    def test_runner_single_restart_matches_direct_attack(self) -> None:
+        adapter = _build_toy_adapter()
+        runner = AttackRunner(adapter)
+        images = torch.full((1, 1, 1, 1), 0.9, dtype=torch.float32)
+        targets = torch.zeros((1, 1, 1), dtype=torch.long)
+        config = AttackConfig(name="pgd", epsilon=0.8, step_size=0.2, steps=4, random_start=False, num_restarts=1)
+
+        direct_output = PGDAttack(adapter, config).run(images, targets)
+        runner_output = runner.run(config, images, targets)
+
+        self.assertTrue(torch.allclose(runner_output.adversarial_images, direct_output.adversarial_images))
+        self.assertTrue(torch.allclose(runner_output.perturbation, direct_output.perturbation))
+        self.assertEqual(runner_output.metadata["num_restarts"], 1)
+        self.assertFalse(runner_output.metadata["sample_wise_worst_case_over_restarts"])
+
+    def test_evaluation_summary_includes_attack_protocol_fields(self) -> None:
+        adapter = _build_toy_adapter()
+        images = torch.full((2, 1, 1, 1), 0.9, dtype=torch.float32)
+        targets = torch.zeros((2, 1, 1), dtype=torch.long)
+        dataloader = DataLoader(TensorDataset(images, targets), batch_size=1, shuffle=False)
+        attack_config = AttackConfig(name="fgsm", epsilon=8.0 / 255.0).with_runtime_overrides(
+            epsilon_radius_255=4.0,
+            attack_backward_mode="default",
+            num_restarts=2,
+            eot_iters=3,
+        )
+
+        summary = evaluate_adversarial_segmentation_model(
+            model=adapter,
+            attack_config=attack_config,
+            dataloader=dataloader,
+        )
+
+        self.assertEqual(summary["attack"]["attack_backward_mode"], "default")
+        self.assertEqual(summary["attack"]["num_restarts"], 2)
+        self.assertEqual(summary["attack"]["eot_iters"], 3)
+        self.assertAlmostEqual(float(summary["attack"]["epsilon_radius_255"]), 4.0)
+        self.assertAlmostEqual(float(summary["attack"]["epsilon"]), 4.0 / 255.0)
+        self.assertTrue(summary["attack"]["sample_wise_worst_case_over_restarts"])
+        self.assertEqual(summary["attack"]["restart_selection"], "per_image_accuracy")
+        self.assertEqual(summary["attack"]["runtime_samples_aggregated"], summary["processed_samples"])
+        self.assertEqual(sum(summary["attack"]["selected_restart_histogram"]), summary["processed_samples"])
+        self.assertEqual(len(summary["attack"]["restart_mean_score_by_restart"]), 2)
 
 
 if __name__ == "__main__":

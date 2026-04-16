@@ -47,6 +47,24 @@ class SEAAttack(SegmentationAttack):
             )
         raise KeyError(f"Unsupported SEA phase: {phase_name}")
 
+    def _phase_objective(
+        self,
+        attack_input: torch.Tensor,
+        *,
+        phase_name: str,
+        targets: torch.Tensor,
+        balanced_weights: torch.Tensor | None,
+        direction: float,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        logits = self.model.logits(attack_input)
+        loss = self._compute_phase_loss(
+            phase_name=phase_name,
+            logits=logits,
+            targets=targets,
+            balanced_weights=balanced_weights,
+        )
+        return direction * loss, {"loss": float(loss.detach().cpu().item())}
+
     def _run_phase(
         self,
         clean: torch.Tensor,
@@ -71,16 +89,16 @@ class SEAAttack(SegmentationAttack):
 
         with torch.enable_grad():
             for _ in range(steps):
-                adversarial = adversarial.detach().requires_grad_(True)
-                logits = self.model.logits(adversarial)
-                loss = self._compute_phase_loss(
-                    phase_name=phase_name,
-                    logits=logits,
-                    targets=labels,
-                    balanced_weights=balanced_weights,
+                gradient, stats = self.estimate_input_gradient(
+                    adversarial,
+                    lambda attack_input: self._phase_objective(
+                        attack_input=attack_input,
+                        phase_name=phase_name,
+                        targets=labels,
+                        balanced_weights=balanced_weights,
+                        direction=direction,
+                    ),
                 )
-                objective = direction * loss
-                gradient = torch.autograd.grad(objective, adversarial, retain_graph=False, create_graph=False)[0]
                 adversarial = adversarial.detach() + step_size * gradient.sign()
                 adversarial = project_linf(
                     adversarial_images=adversarial,
@@ -89,7 +107,7 @@ class SEAAttack(SegmentationAttack):
                     min_value=self.config.clamp_min,
                     max_value=self.config.clamp_max,
                 )
-                loss_value = float(loss.detach().cpu().item())
+                loss_value = float(stats["loss"]) if isinstance(stats, dict) else float(stats)
 
         return adversarial.detach(), loss_value
 

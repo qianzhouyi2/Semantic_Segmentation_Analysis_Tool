@@ -1,0 +1,13 @@
+name: segpgd
+epsilon: 0.03137254901960784
+step_size: 0.00784313725490196
+steps: 40
+clamp_min: 0.0
+clamp_max: 1.0
+random_start: true
+targeted: false
+loss_name: cross_entropy
+ignore_index: 255
+attack_backward_mode: bpda_ste
+num_restarts: 5
+eot_iters: 4

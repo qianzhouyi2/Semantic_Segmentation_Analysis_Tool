@@ -23,6 +23,57 @@ class TranSegPGDAttack(SegmentationAttack):
     def beta(self) -> float:
         return float(self.config.extra.get("beta", 0.1))
 
+    def _objective(
+        self,
+        attack_input: torch.Tensor,
+        *,
+        labels: torch.Tensor,
+        clean_logits: torch.Tensor,
+        direction: float,
+    ) -> tuple[torch.Tensor, dict[str, float | str]]:
+        logits = self.model.logits(attack_input)
+        loss_map, valid_mask = segmentation_attack_loss_map(
+            logits=logits,
+            targets=labels,
+            loss_name=self.config.loss_name,
+            ignore_index=self.config.ignore_index,
+        )
+        if not valid_mask.any():
+            return logits.sum() * 0.0, {"loss": 0.0, "last_stage": "stage1"}
+
+        safe_targets = build_safe_targets(targets=labels, valid_mask=valid_mask)
+        predictions = logits.argmax(dim=1)
+        correct_mask = valid_mask & (predictions == safe_targets)
+        incorrect_mask = valid_mask & ~correct_mask
+
+        if correct_mask.any():
+            weighted_map = (
+                (1.0 - self.gamma()) * correct_mask.float().detach()
+                + self.gamma() * incorrect_mask.float().detach()
+            ) * loss_map
+            stage_name = "stage1"
+        else:
+            kl_map, kl_valid_mask = segmentation_kl_divergence_map(
+                adv_logits=logits,
+                clean_logits=clean_logits,
+                targets=labels,
+                ignore_index=self.config.ignore_index,
+            )
+            mean_kl = kl_map.masked_select(kl_valid_mask).mean()
+            high_transfer_mask = valid_mask & (kl_map > mean_kl)
+            low_transfer_mask = valid_mask & ~high_transfer_mask
+            weighted_map = (
+                (1.0 - self.beta()) * high_transfer_mask.float().detach()
+                + self.beta() * low_transfer_mask.float().detach()
+            ) * loss_map
+            stage_name = "stage2"
+
+        loss = spatial_mean(weighted_map).mean()
+        return direction * loss, {
+            "loss": float(loss.detach().cpu().item()),
+            "last_stage": stage_name,
+        }
+
     def run(self, images: torch.Tensor, targets: torch.Tensor) -> AttackOutput:
         epsilon = self.config.epsilon
         step_size = self.config.resolved_step_size()
@@ -51,50 +102,24 @@ class TranSegPGDAttack(SegmentationAttack):
         loss_value = 0.0
         with torch.enable_grad():
             for _ in range(steps):
-                adversarial = adversarial.detach().requires_grad_(True)
-                logits = self.model.logits(adversarial)
-                loss_map, valid_mask = segmentation_attack_loss_map(
-                    logits=logits,
-                    targets=labels,
-                    loss_name=self.config.loss_name,
-                    ignore_index=self.config.ignore_index,
-                )
-                if not valid_mask.any():
-                    adversarial = adversarial.detach()
-                    break
-
-                safe_targets = build_safe_targets(targets=labels, valid_mask=valid_mask)
-                predictions = logits.argmax(dim=1)
-                correct_mask = valid_mask & (predictions == safe_targets)
-                incorrect_mask = valid_mask & ~correct_mask
-
-                if correct_mask.any():
-                    last_stage = "stage1"
-                    stage1_steps += 1
-                    weighted_map = (
-                        (1.0 - self.gamma()) * correct_mask.float().detach()
-                        + self.gamma() * incorrect_mask.float().detach()
-                    ) * loss_map
-                else:
-                    last_stage = "stage2"
-                    stage2_steps += 1
-                    kl_map, kl_valid_mask = segmentation_kl_divergence_map(
-                        adv_logits=logits,
+                gradient, stats = self.estimate_input_gradient(
+                    adversarial,
+                    lambda attack_input: self._objective(
+                        attack_input=attack_input,
+                        labels=labels,
                         clean_logits=clean_logits,
-                        targets=labels,
-                        ignore_index=self.config.ignore_index,
-                    )
-                    mean_kl = kl_map.masked_select(kl_valid_mask).mean()
-                    high_transfer_mask = valid_mask & (kl_map > mean_kl)
-                    low_transfer_mask = valid_mask & ~high_transfer_mask
-                    weighted_map = (
-                        (1.0 - self.beta()) * high_transfer_mask.float().detach()
-                        + self.beta() * low_transfer_mask.float().detach()
-                    ) * loss_map
-
-                loss = spatial_mean(weighted_map).mean()
-                objective = direction * loss
-                gradient = torch.autograd.grad(objective, adversarial, retain_graph=False, create_graph=False)[0]
+                        direction=direction,
+                    ),
+                )
+                if isinstance(stats, dict):
+                    last_stage = str(stats["last_stage"])
+                    loss_value = float(stats["loss"])
+                else:
+                    loss_value = float(stats)
+                if last_stage == "stage1":
+                    stage1_steps += 1
+                else:
+                    stage2_steps += 1
                 adversarial = adversarial.detach() + step_size * gradient.sign()
                 adversarial = project_linf(
                     adversarial_images=adversarial,
@@ -103,7 +128,6 @@ class TranSegPGDAttack(SegmentationAttack):
                     min_value=self.config.clamp_min,
                     max_value=self.config.clamp_max,
                 )
-                loss_value = float(loss.detach().cpu().item())
 
         perturbation = adversarial - clean
         return AttackOutput(

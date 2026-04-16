@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -p gpu
 #SBATCH --job-name=voc_trproto_case
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/slurm-%x-%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="${SLURM_SUBMIT_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 FEISHU_CONFIG="${HOME}/.feishu/config.json"
 FEISHU_BRIDGE="${FEISHU_BRIDGE:-${HOME}/tools/feishu/interactive_bridge.py}"
 
@@ -22,6 +22,11 @@ DATASET_ROOT="${DATASET_ROOT:-datasets}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 DEVICE="${DEVICE:-cuda}"
+EPSILON_SCALE="${EPSILON_SCALE:-1.0}"
+EPSILON_RADIUS_255="${EPSILON_RADIUS_255:-}"
+ATTACK_BACKWARD_MODE="${ATTACK_BACKWARD_MODE:-default}"
+NUM_RESTARTS="${NUM_RESTARTS:-1}"
+EOT_ITERS="${EOT_ITERS:-1}"
 
 feishu_notify() {
   local text="$1"
@@ -73,13 +78,24 @@ if [[ -f "${OUTPUT_DIR}/summary.json" ]]; then
   exit 0
 fi
 
+attack_protocol_args=(
+  --epsilon-scale "${EPSILON_SCALE}"
+  --attack-backward-mode "${ATTACK_BACKWARD_MODE}"
+  --num-restarts "${NUM_RESTARTS}"
+  --eot-iters "${EOT_ITERS}"
+)
+if [[ -n "${EPSILON_RADIUS_255}" ]]; then
+  attack_protocol_args+=(--epsilon-radius-255 "${EPSILON_RADIUS_255}")
+fi
+
 python scripts/run_transfer_group_attack.py \
   --case-json "${CASE_JSON}" \
   --dataset-root "${DATASET_ROOT}" \
   --output-dir "${OUTPUT_DIR}" \
   --batch-size "${BATCH_SIZE}" \
   --num-workers "${NUM_WORKERS}" \
-  --device "${DEVICE}"
+  --device "${DEVICE}" \
+  "${attack_protocol_args[@]}"
 
 feishu_notify "${SLURM_JOB_ID:-nojob}:done transfer-protocol ${case_id}"
 status_flag="done"

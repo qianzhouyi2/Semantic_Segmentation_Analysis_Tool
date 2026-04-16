@@ -33,6 +33,38 @@ class FSPGDAttack(SegmentationAttack):
         weight = ((affinity * off_diagonal) > threshold).to(dtype=feature_map.dtype)
         return flat_feature, weight
 
+    def _objective(
+        self,
+        attack_input: torch.Tensor,
+        *,
+        clean_feature_map: torch.Tensor,
+        clean_feature_flat: torch.Tensor,
+        affinity_weight: torch.Tensor,
+        pair_count: torch.Tensor,
+        step_index: int,
+        steps: int,
+        direction: float,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        _, adv_features = self.model.forward_with_features(attack_input)
+        adv_feature_map = select_feature_map(adv_features, preferred_key=self.feature_key())
+        if adv_feature_map.shape[-2:] != clean_feature_map.shape[-2:]:
+            adv_feature_map = F.interpolate(
+                adv_feature_map,
+                size=clean_feature_map.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+
+        adv_feature_flat = adv_feature_map.flatten(2)
+        diagonal_similarity = F.cosine_similarity(clean_feature_flat, adv_feature_flat, dim=1).mean(dim=1)
+        combinational_similarity = (
+            affinity_weight * torch.bmm(adv_feature_flat.transpose(1, 2), adv_feature_flat)
+        ).sum(dim=(1, 2)) / pair_count / 2.0
+        lambda_t = float(step_index + 1) / float(max(steps, 1))
+        loss_per_image = -lambda_t * diagonal_similarity - (1.0 - lambda_t) * combinational_similarity
+        loss = loss_per_image.mean()
+        return direction * loss, {"loss": float(loss.detach().cpu().item())}
+
     def run(self, images: torch.Tensor, targets: torch.Tensor) -> AttackOutput:
         del targets
         epsilon = self.config.epsilon
@@ -61,27 +93,19 @@ class FSPGDAttack(SegmentationAttack):
         loss_value = 0.0
         with torch.enable_grad():
             for step_index in range(steps):
-                adversarial = adversarial.detach().requires_grad_(True)
-                _, adv_features = self.model.forward_with_features(adversarial)
-                adv_feature_map = select_feature_map(adv_features, preferred_key=self.feature_key())
-                if adv_feature_map.shape[-2:] != clean_feature_map.shape[-2:]:
-                    adv_feature_map = F.interpolate(
-                        adv_feature_map,
-                        size=clean_feature_map.shape[-2:],
-                        mode="bilinear",
-                        align_corners=False,
-                    )
-
-                adv_feature_flat = adv_feature_map.flatten(2)
-                diagonal_similarity = F.cosine_similarity(clean_feature_flat, adv_feature_flat, dim=1).mean(dim=1)
-                combinational_similarity = (
-                    affinity_weight * torch.bmm(adv_feature_flat.transpose(1, 2), adv_feature_flat)
-                ).sum(dim=(1, 2)) / pair_count / 2.0
-                lambda_t = float(step_index + 1) / float(max(steps, 1))
-                loss_per_image = -lambda_t * diagonal_similarity - (1.0 - lambda_t) * combinational_similarity
-                loss = loss_per_image.mean()
-                objective = direction * loss
-                gradient = torch.autograd.grad(objective, adversarial, retain_graph=False, create_graph=False)[0]
+                gradient, stats = self.estimate_input_gradient(
+                    adversarial,
+                    lambda attack_input: self._objective(
+                        attack_input=attack_input,
+                        clean_feature_map=clean_feature_map,
+                        clean_feature_flat=clean_feature_flat,
+                        affinity_weight=affinity_weight,
+                        pair_count=pair_count,
+                        step_index=step_index,
+                        steps=steps,
+                        direction=direction,
+                    ),
+                )
                 adversarial = adversarial.detach() + step_size * gradient.sign()
                 adversarial = project_linf(
                     adversarial_images=adversarial,
@@ -90,7 +114,7 @@ class FSPGDAttack(SegmentationAttack):
                     min_value=self.config.clamp_min,
                     max_value=self.config.clamp_max,
                 )
-                loss_value = float(loss.detach().cpu().item())
+                loss_value = float(stats["loss"]) if isinstance(stats, dict) else float(stats)
 
         perturbation = adversarial - clean
         return AttackOutput(
