@@ -730,15 +730,16 @@ def _render_cam_preview(label_config_path: str) -> None:
 
     for layer_label, cam_result in zip(layer_labels, cam_results, strict=True):
         st.caption(f"{layer_label} CAM 层: {cam_result.feature_key}")
+        st.caption("pred_pixels 表示当前预测中属于 CAM 目标类别的像素数，不是 CAM 热图的高响应像素数。")
         cam_columns = st.columns(3)
         cam_columns[0].image(
             cam_result.clean_overlay,
-            caption=f"Clean CAM | mean={cam_result.clean_mean:.4f} pixels={cam_result.clean_target_pixels}",
+            caption=f"Clean CAM | mean={cam_result.clean_mean:.4f} pred_pixels={cam_result.clean_target_pixels}",
             use_container_width=True,
         )
         cam_columns[1].image(
             cam_result.adversarial_overlay,
-            caption=f"Adv CAM | mean={cam_result.adversarial_mean:.4f} pixels={cam_result.adversarial_target_pixels}",
+            caption=f"Adv CAM | mean={cam_result.adversarial_mean:.4f} pred_pixels={cam_result.adversarial_target_pixels}",
             use_container_width=True,
         )
         cam_columns[2].image(
