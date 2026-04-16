@@ -1,0 +1,127 @@
+{
+  "search_root": "results/reports/voc_train_threshold_search_rerun",
+  "output_dir": "configs/defenses",
+  "num_configs": 12,
+  "rows": [
+    {
+      "checkpoint": "models/Segmenter_ViT_S_VOC_adv.pth",
+      "checkpoint_name": "Segmenter_ViT_S_VOC_adv",
+      "family": "segmenter_vit_s",
+      "variant": "extrasparse",
+      "threshold": 0.2,
+      "stats_path": "models/defenses/extrasparse/Segmenter_ViT_S_VOC_adv_extrasparse_train.pt",
+      "config_path": "configs/defenses/Segmenter_ViT_S_VOC_adv_extrasparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/Segmenter_ViT_S_VOC_adv/extrasparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/Segmenter_ViT_S_VOC_adv.pth",
+      "checkpoint_name": "Segmenter_ViT_S_VOC_adv",
+      "family": "segmenter_vit_s",
+      "variant": "meansparse",
+      "threshold": 0.2,
+      "stats_path": "models/defenses/meansparse/Segmenter_ViT_S_VOC_adv_meansparse_train.pt",
+      "config_path": "configs/defenses/Segmenter_ViT_S_VOC_adv_meansparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/Segmenter_ViT_S_VOC_adv/meansparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/Segmenter_ViT_S_VOC_clean.pth",
+      "checkpoint_name": "Segmenter_ViT_S_VOC_clean",
+      "family": "segmenter_vit_s",
+      "variant": "extrasparse",
+      "threshold": 0.25,
+      "stats_path": "models/defenses/extrasparse/Segmenter_ViT_S_VOC_clean_extrasparse_train.pt",
+      "config_path": "configs/defenses/Segmenter_ViT_S_VOC_clean_extrasparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/Segmenter_ViT_S_VOC_clean/extrasparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/Segmenter_ViT_S_VOC_clean.pth",
+      "checkpoint_name": "Segmenter_ViT_S_VOC_clean",
+      "family": "segmenter_vit_s",
+      "variant": "meansparse",
+      "threshold": 0.25,
+      "stats_path": "models/defenses/meansparse/Segmenter_ViT_S_VOC_clean_meansparse_train.pt",
+      "config_path": "configs/defenses/Segmenter_ViT_S_VOC_clean_meansparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/Segmenter_ViT_S_VOC_clean/meansparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/UperNet_ConvNext_T_VOC_adv.pth",
+      "checkpoint_name": "UperNet_ConvNext_T_VOC_adv",
+      "family": "upernet_convnext",
+      "variant": "extrasparse",
+      "threshold": 0.25,
+      "stats_path": "models/defenses/extrasparse/UperNet_ConvNext_T_VOC_adv_extrasparse_train.pt",
+      "config_path": "configs/defenses/UperNet_ConvNext_T_VOC_adv_extrasparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/UperNet_ConvNext_T_VOC_adv/extrasparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/UperNet_ConvNext_T_VOC_adv.pth",
+      "checkpoint_name": "UperNet_ConvNext_T_VOC_adv",
+      "family": "upernet_convnext",
+      "variant": "meansparse",
+      "threshold": 0.25,
+      "stats_path": "models/defenses/meansparse/UperNet_ConvNext_T_VOC_adv_meansparse_train.pt",
+      "config_path": "configs/defenses/UperNet_ConvNext_T_VOC_adv_meansparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/UperNet_ConvNext_T_VOC_adv/meansparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/UperNet_ConvNext_T_VOC_clean.pth",
+      "checkpoint_name": "UperNet_ConvNext_T_VOC_clean",
+      "family": "upernet_convnext",
+      "variant": "extrasparse",
+      "threshold": 0.25,
+      "stats_path": "models/defenses/extrasparse/UperNet_ConvNext_T_VOC_clean_extrasparse_train.pt",
+      "config_path": "configs/defenses/UperNet_ConvNext_T_VOC_clean_extrasparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/UperNet_ConvNext_T_VOC_clean/extrasparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/UperNet_ConvNext_T_VOC_clean.pth",
+      "checkpoint_name": "UperNet_ConvNext_T_VOC_clean",
+      "family": "upernet_convnext",
+      "variant": "meansparse",
+      "threshold": 0.25,
+      "stats_path": "models/defenses/meansparse/UperNet_ConvNext_T_VOC_clean_meansparse_train.pt",
+      "config_path": "configs/defenses/UperNet_ConvNext_T_VOC_clean_meansparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/UperNet_ConvNext_T_VOC_clean/meansparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/UperNet_ResNet50_VOC_adv.pth",
+      "checkpoint_name": "UperNet_ResNet50_VOC_adv",
+      "family": "upernet_resnet50",
+      "variant": "extrasparse",
+      "threshold": 0.2,
+      "stats_path": "models/defenses/extrasparse/UperNet_ResNet50_VOC_adv_extrasparse_train.pt",
+      "config_path": "configs/defenses/UperNet_ResNet50_VOC_adv_extrasparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/UperNet_ResNet50_VOC_adv/extrasparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/UperNet_ResNet50_VOC_adv.pth",
+      "checkpoint_name": "UperNet_ResNet50_VOC_adv",
+      "family": "upernet_resnet50",
+      "variant": "meansparse",
+      "threshold": 0.25,
+      "stats_path": "models/defenses/meansparse/UperNet_ResNet50_VOC_adv_meansparse_train.pt",
+      "config_path": "configs/defenses/UperNet_ResNet50_VOC_adv_meansparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/UperNet_ResNet50_VOC_adv/meansparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/UperNet_ResNet50_VOC_clean.pth",
+      "checkpoint_name": "UperNet_ResNet50_VOC_clean",
+      "family": "upernet_resnet50",
+      "variant": "extrasparse",
+      "threshold": 0.25,
+      "stats_path": "models/defenses/extrasparse/UperNet_ResNet50_VOC_clean_extrasparse_train.pt",
+      "config_path": "configs/defenses/UperNet_ResNet50_VOC_clean_extrasparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/UperNet_ResNet50_VOC_clean/extrasparse/search_summary.json"
+    },
+    {
+      "checkpoint": "models/UperNet_ResNet50_VOC_clean.pth",
+      "checkpoint_name": "UperNet_ResNet50_VOC_clean",
+      "family": "upernet_resnet50",
+      "variant": "meansparse",
+      "threshold": 0.1,
+      "stats_path": "models/defenses/meansparse/UperNet_ResNet50_VOC_clean_meansparse_train.pt",
+      "config_path": "configs/defenses/UperNet_ResNet50_VOC_clean_meansparse.yaml",
+      "search_summary": "results/reports/voc_train_threshold_search_rerun/UperNet_ResNet50_VOC_clean/meansparse/search_summary.json"
+    }
+  ]
+}

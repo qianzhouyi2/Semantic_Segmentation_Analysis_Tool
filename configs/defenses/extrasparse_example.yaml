@@ -1,0 +1,4 @@
+name: extrasparse
+threshold: 0.4
+stats_path: ../../models/defenses/extrasparse_example_stats.pt
+strict_stats: true

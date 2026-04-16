@@ -1,0 +1,9 @@
+name: cc_extra_sparse
+threshold: 0.4
+stats_path: ../../models/defenses/cc_extra_sparse_example_stats.pt
+direction_mode: weight_sign
+lambda_mix: 0.5
+alpha0_mode: fixed
+beta: 0.15
+tau: 1.5
+strict_stats: true

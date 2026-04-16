@@ -7,6 +7,7 @@ from src.attacks.dag import DAGAttack
 from src.attacks.fgsm import FGSMAttack
 from src.attacks.fspgd import FSPGDAttack
 from src.attacks.pgd import PGDAttack
+from src.attacks.rppgd import RPPGDAttack
 from src.attacks.sea import SEAAttack
 from src.attacks.segpgd import SegPGDAttack
 from src.attacks.transfer import (
@@ -27,6 +28,7 @@ __all__ = [
     "AttackRunner",
     "FGSMAttack",
     "PGDAttack",
+    "RPPGDAttack",
     "CosPGDAttack",
     "BIMAttack",
     "SegPGDAttack",

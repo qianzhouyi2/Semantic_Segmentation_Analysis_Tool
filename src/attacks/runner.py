@@ -11,6 +11,7 @@ from src.attacks.dag import DAGAttack
 from src.attacks.fgsm import FGSMAttack
 from src.attacks.fspgd import FSPGDAttack
 from src.attacks.pgd import PGDAttack
+from src.attacks.rppgd import RPPGDAttack
 from src.attacks.sea import SEAAttack
 from src.attacks.segpgd import SegPGDAttack
 from src.attacks.transfer import (
@@ -28,6 +29,8 @@ from src.models.base import SegmentationModelAdapter
 ATTACKS = {
     "fgsm": FGSMAttack,
     "pgd": PGDAttack,
+    "rppgd": RPPGDAttack,
+    "rp-pgd": RPPGDAttack,
     "cospgd": CosPGDAttack,
     "bim": BIMAttack,
     "segpgd": SegPGDAttack,

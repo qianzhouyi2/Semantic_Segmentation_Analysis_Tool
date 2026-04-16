@@ -19,6 +19,7 @@ from src.apps.adversarial_preview import (
     build_layer_visualization,
     discover_attack_config_options,
     discover_checkpoint_options,
+    discover_defense_config_options,
     infer_model_family_from_checkpoint,
     ordered_feature_layer_names,
     FeaturePreviewResult,
@@ -56,6 +57,22 @@ class AdversarialPreviewDiscoveryTest(unittest.TestCase):
 
             self.assertEqual(len(options), 1)
             self.assertEqual(options[0].family, "upernet_convnext")
+
+    def test_discover_defense_config_options_reads_sparse_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / "meansparse.yaml").write_text(
+                "name: meansparse\nthreshold: 0.25\nstats_path: ./stats.pt\nfamily: upernet_convnext\n",
+                encoding="utf-8",
+            )
+            (root / "invalid.yaml").write_text("- just\n- a\n- list\n", encoding="utf-8")
+
+            options = discover_defense_config_options(root)
+
+            self.assertEqual(len(options), 1)
+            self.assertEqual(options[0].variant, "meansparse")
+            self.assertEqual(options[0].family, "upernet_convnext")
+            self.assertAlmostEqual(options[0].threshold, 0.25)
 
 
 class AdversarialPreviewVisualizationTest(unittest.TestCase):

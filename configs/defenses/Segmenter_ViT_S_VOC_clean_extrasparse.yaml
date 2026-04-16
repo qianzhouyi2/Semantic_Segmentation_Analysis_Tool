@@ -1,0 +1,5 @@
+name: extrasparse
+family: segmenter_vit_s
+threshold: 0.25
+stats_path: ../../models/defenses/extrasparse/Segmenter_ViT_S_VOC_clean_extrasparse_train.pt
+strict_stats: true

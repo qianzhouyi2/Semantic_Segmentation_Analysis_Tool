@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attack-config", required=True, help="Path to the attack YAML config.")
     parser.add_argument("--family", required=True, choices=MODEL_FAMILY_CHOICES, help="Model family to instantiate.")
     parser.add_argument("--checkpoint", required=True, help="Checkpoint path.")
+    parser.add_argument("--defense-config", default="", help="Optional sparse defense YAML config.")
     parser.add_argument("--dataset-root", default="datasets", help="VOC dataset root that contains VOCdevkit/.")
     parser.add_argument("--output-dir", default="", help="Directory for outputs. Defaults to results/reports/voc_adv_eval/<checkpoint>_<attack>.")
     parser.add_argument("--batch-size", type=int, default=4, help="Evaluation batch size.")
@@ -129,7 +130,7 @@ def main() -> None:
     device = torch.device(args.device if args.device.startswith("cuda") and torch.cuda.is_available() else "cpu")
     logger.info("Starting adversarial evaluation")
     logger.info(
-        "family=%s checkpoint=%s device=%s attack=%s epsilon=%s step_size=%s steps=%s",
+        "family=%s checkpoint=%s device=%s attack=%s epsilon=%s step_size=%s steps=%s defense_config=%s",
         args.family,
         checkpoint_path.resolve(),
         device,
@@ -137,6 +138,7 @@ def main() -> None:
         attack_config.epsilon,
         attack_config.resolved_step_size(),
         attack_config.steps,
+        Path(args.defense_config).resolve() if args.defense_config else "<none>",
     )
 
     dataset = PascalVOCValidationDataset(args.dataset_root, split="val", resize_short=473, crop_size=473)
@@ -154,9 +156,11 @@ def main() -> None:
         num_classes=args.num_classes,
         map_location="cpu",
         strict=args.strict,
+        defense_config_path=args.defense_config or None,
     )
     adapter = TorchSegmentationModelAdapter(model=model, num_classes=args.num_classes, device=device)
     logger.info("Checkpoint loaded: missing_keys=%d unexpected_keys=%d", len(missing_keys), len(unexpected_keys))
+    sparse_defense_info = getattr(model, "_sparse_defense_info", None)
 
     summary = evaluate_adversarial_segmentation_model(
         model=adapter,
@@ -183,6 +187,8 @@ def main() -> None:
         "model": {
             "family": args.family,
             "checkpoint": str(checkpoint_path.resolve()),
+            "defense_config": str(Path(args.defense_config).resolve()) if args.defense_config else None,
+            "sparse_defense": sparse_defense_info,
             "missing_keys": missing_keys,
             "unexpected_keys": unexpected_keys,
         },
@@ -207,6 +213,11 @@ def main() -> None:
         [
             f"- family: {args.family}",
             f"- checkpoint: {checkpoint_path.resolve()}",
+            (
+                f"- defense_config: {Path(args.defense_config).resolve()}"
+                if args.defense_config
+                else "- defense_config: <none>"
+            ),
             f"- dataset_root: {Path(args.dataset_root).resolve()}",
             f"- attack: {attack_config.name}",
             f"- epsilon: {attack_config.epsilon}",

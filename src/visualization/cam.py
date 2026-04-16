@@ -8,9 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from src.models import TorchSegmentationModelAdapter
-from src.models.architectures.segmenter import SegMenter
-from src.models.architectures.upernet import TorchvisionResNetBackbone, UperNetForSemanticSegmentation
-from src.models.backbones.convnext import ConvNeXt
+from src.models.architectures.segmenter import SegMenter, pad_to_patch_size, remove_padding
 from src.robustness.visualization import normalize_heatmap, overlay_heatmap_on_image
 
 
@@ -32,13 +30,18 @@ def discover_cam_supported_feature_keys(
     model: TorchSegmentationModelAdapter,
     feature_keys: list[str],
 ) -> list[str]:
-    if isinstance(model.model, UperNetForSemanticSegmentation):
-        if isinstance(model.model.backbone, ConvNeXt):
-            return [key for key in feature_keys if key.startswith("backbone:stage")]
-        if isinstance(model.model.backbone, TorchvisionResNetBackbone):
-            return [key for key in feature_keys if key.startswith("backbone:stage")]
-    if isinstance(model.model, SegMenter):
-        return [key for key in feature_keys if key.startswith("encoder:block")]
+    # Prefer feature-name patterns over strict type checks. This is robust to
+    # Streamlit hot-reload / cache reuse, where stale model instances can fail
+    # isinstance(...) checks after code reload even though their feature maps
+    # remain valid for CAM.
+    backbone_stage_keys = [key for key in feature_keys if key.startswith("backbone:stage")]
+    if backbone_stage_keys:
+        return backbone_stage_keys
+
+    encoder_block_keys = [key for key in feature_keys if key.startswith("encoder:block")]
+    if encoder_block_keys:
+        return encoder_block_keys
+
     return [key for key in feature_keys if key == "logits"]
 
 
@@ -53,12 +56,48 @@ def select_default_cam_feature_key(
     return supported_keys[-1]
 
 
+def select_representative_cam_feature_keys(
+    model: TorchSegmentationModelAdapter,
+    feature_keys: list[str],
+    max_keys: int = 3,
+) -> list[str]:
+    supported_keys = discover_cam_supported_feature_keys(model, feature_keys)
+    if max_keys <= 0 or not supported_keys:
+        return []
+    if len(supported_keys) <= max_keys:
+        return supported_keys
+
+    target_count = min(max_keys, len(supported_keys))
+    if target_count == 1:
+        return [supported_keys[-1]]
+
+    selected_keys: list[str] = []
+    for index in range(target_count):
+        position = round(index * (len(supported_keys) - 1) / (target_count - 1))
+        feature_key = supported_keys[position]
+        if feature_key not in selected_keys:
+            selected_keys.append(feature_key)
+
+    if len(selected_keys) < target_count:
+        for feature_key in supported_keys:
+            if feature_key in selected_keys:
+                continue
+            selected_keys.append(feature_key)
+            if len(selected_keys) == target_count:
+                break
+
+    return selected_keys
+
+
 def compute_feature_grad_cam(
     model: TorchSegmentationModelAdapter,
     image: torch.Tensor,
     feature_key: str,
     class_id: int,
 ) -> tuple[np.ndarray, dict[str, Any]]:
+    if feature_key.startswith("encoder:block") and _supports_segmenter_cam(model.model):
+        return _compute_segmenter_grad_cam(model, image, feature_key, class_id)
+
     model.model.zero_grad(set_to_none=True)
     inputs = image.unsqueeze(0).to(model.device)
 
@@ -96,6 +135,88 @@ def compute_feature_grad_cam(
         "target_pixels": target_pixels,
         "score": float(target_score.detach().cpu().item()),
     }
+
+
+def _compute_segmenter_grad_cam(
+    model: TorchSegmentationModelAdapter,
+    image: torch.Tensor,
+    feature_key: str,
+    class_id: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    model.model.zero_grad(set_to_none=True)
+    inputs = image.unsqueeze(0).to(model.device)
+    segmenter = model.model
+
+    if not _supports_segmenter_cam(segmenter):
+        raise TypeError("Segmenter CAM path expects a Segmenter-like model with encoder/decoder/patch_size/backbone.")
+
+    try:
+        block_index = int(feature_key.replace("encoder:block", ""))
+    except ValueError as exc:
+        raise KeyError(f"Unsupported Segmenter CAM feature key: {feature_key!r}") from exc
+
+    original_size = (inputs.size(2), inputs.size(3))
+    padded = pad_to_patch_size(inputs, segmenter.patch_size)
+    padded_size = (padded.size(2), padded.size(3))
+    grid_h = padded_size[0] // segmenter.patch_size
+    grid_w = padded_size[1] // segmenter.patch_size
+    num_extra_tokens = 0 if "SAM" in segmenter.backbone else 1 + int(segmenter.encoder.distilled)
+
+    with torch.enable_grad():
+        tokens, hidden_states = segmenter.encoder.forward_tokens(padded, collect_hidden_states=True)
+        if block_index >= len(hidden_states):
+            raise KeyError(
+                f"Feature key '{feature_key}' is not available for CAM. "
+                f"Segmenter returned {len(hidden_states)} encoder blocks."
+            )
+
+        hidden_state = hidden_states[block_index]
+        spatial_tokens = hidden_state[:, num_extra_tokens:]
+        feature_map = spatial_tokens.transpose(1, 2).reshape(spatial_tokens.size(0), spatial_tokens.size(2), grid_h, grid_w)
+
+        logits = segmenter.decoder(tokens[:, num_extra_tokens:], padded_size)
+        logits = F.interpolate(logits, size=padded_size, mode="bilinear")
+        logits = remove_padding(logits, original_size)
+
+        class_logits = logits[:, int(class_id)]
+        prediction = logits.argmax(dim=1)
+        target_mask = prediction == int(class_id)
+        target_pixels = int(target_mask.sum().detach().cpu().item())
+        if target_pixels > 0:
+            target_score = class_logits.masked_select(target_mask).mean()
+        else:
+            target_score = class_logits.mean()
+
+        # Segmenter feature maps are reshaped views of token sequences. The
+        # decoder graph consumes the original hidden-state tensor, not the 4D
+        # view, so gradients must be taken w.r.t. the hidden state and then
+        # reshaped back to the spatial patch map for CAM.
+        hidden_gradients = torch.autograd.grad(
+            target_score,
+            hidden_state,
+            retain_graph=False,
+            create_graph=False,
+        )[0]
+        gradients = hidden_gradients[:, num_extra_tokens:].transpose(1, 2).reshape_as(feature_map)
+
+    weights = gradients.mean(dim=(2, 3), keepdim=True)
+    cam = torch.relu((weights * feature_map).sum(dim=1, keepdim=True))
+    cam = F.interpolate(cam, size=inputs.shape[-2:], mode="bilinear", align_corners=False)
+    cam_heatmap = normalize_heatmap(cam[0, 0].detach().cpu().numpy())
+    model.model.zero_grad(set_to_none=True)
+    return cam_heatmap, {
+        "feature_key": feature_key,
+        "class_id": int(class_id),
+        "target_pixels": target_pixels,
+        "score": float(target_score.detach().cpu().item()),
+    }
+
+
+def _supports_segmenter_cam(model: object) -> bool:
+    return all(
+        hasattr(model, attribute)
+        for attribute in ("encoder", "decoder", "patch_size", "backbone")
+    )
 
 
 def build_cam_visualization(

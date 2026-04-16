@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 import torch.nn as nn
@@ -12,12 +13,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.models.architectures.segmenter import create_segmenter
 from src.models.base import TorchSegmentationModelAdapter
 from src.visualization.cam import (
     build_cam_visualization,
     compute_feature_grad_cam,
     discover_cam_supported_feature_keys,
     select_default_cam_feature_key,
+    select_representative_cam_feature_keys,
 )
 
 
@@ -33,6 +36,34 @@ class CamVisualizationTest(unittest.TestCase):
         heatmap, metadata = compute_feature_grad_cam(adapter, image, feature_key="logits", class_id=0)
 
         self.assertEqual(heatmap.shape, (4, 4))
+        self.assertGreaterEqual(float(heatmap.min()), 0.0)
+        self.assertLessEqual(float(heatmap.max()), 1.0)
+        self.assertIn("target_pixels", metadata)
+
+    def test_compute_feature_grad_cam_supports_segmenter_encoder_blocks(self) -> None:
+        segmenter = create_segmenter(
+            {
+                "image_size": (32, 32),
+                "patch_size": 16,
+                "n_layers": 2,
+                "d_model": 384,
+                "n_heads": 6,
+                "normalization": "vit",
+                "distilled": False,
+                "backbone": "vit_small_patch16_224",
+                "dropout": 0.0,
+                "drop_path_rate": 0.0,
+                "decoder": {"name": "linear"},
+                "n_cls": 2,
+            },
+            backbone="vit_small_patch16_224",
+        )
+        adapter = TorchSegmentationModelAdapter(model=segmenter, num_classes=2, device="cpu")
+        image = torch.rand((3, 32, 32), dtype=torch.float32)
+
+        heatmap, metadata = compute_feature_grad_cam(adapter, image, feature_key="encoder:block00", class_id=0)
+
+        self.assertEqual(heatmap.shape, (32, 32))
         self.assertGreaterEqual(float(heatmap.min()), 0.0)
         self.assertLessEqual(float(heatmap.max()), 1.0)
         self.assertIn("target_pixels", metadata)
@@ -63,10 +94,17 @@ class CamVisualizationTest(unittest.TestCase):
         self.assertEqual(payload.diff_image.shape, (4, 4, 3))
         self.assertGreaterEqual(payload.diff_mean, 0.0)
 
-    def test_discover_cam_supported_feature_keys_falls_back_to_logits_for_generic_models(self) -> None:
+    def test_discover_cam_supported_feature_keys_prefers_backbone_stage_keys_by_name(self) -> None:
         adapter = TorchSegmentationModelAdapter(nn.Conv2d(1, 2, kernel_size=1), num_classes=2, device="cpu")
 
-        keys = discover_cam_supported_feature_keys(adapter, ["encoder:block00", "logits"])
+        keys = discover_cam_supported_feature_keys(adapter, ["backbone:stage0:block00", "logits"])
+
+        self.assertEqual(keys, ["backbone:stage0:block00"])
+
+    def test_discover_cam_supported_feature_keys_falls_back_to_logits_when_only_logits_exist(self) -> None:
+        adapter = TorchSegmentationModelAdapter(nn.Conv2d(1, 2, kernel_size=1), num_classes=2, device="cpu")
+
+        keys = discover_cam_supported_feature_keys(adapter, ["logits"])
 
         self.assertEqual(keys, ["logits"])
 
@@ -75,7 +113,42 @@ class CamVisualizationTest(unittest.TestCase):
 
         feature_key = select_default_cam_feature_key(adapter, ["encoder:block00", "logits"])
 
-        self.assertEqual(feature_key, "logits")
+        self.assertEqual(feature_key, "encoder:block00")
+
+    def test_select_representative_cam_feature_keys_picks_shallow_mid_and_deep(self) -> None:
+        adapter = TorchSegmentationModelAdapter(nn.Conv2d(1, 2, kernel_size=1), num_classes=2, device="cpu")
+
+        with patch(
+            "src.visualization.cam.discover_cam_supported_feature_keys",
+            return_value=[
+                "backbone:stage0:block00",
+                "backbone:stage1:block00",
+                "backbone:stage2:block00",
+                "backbone:stage3:block00",
+                "backbone:stage4:block00",
+            ],
+        ):
+            feature_keys = select_representative_cam_feature_keys(adapter, [])
+
+        self.assertEqual(
+            feature_keys,
+            [
+                "backbone:stage0:block00",
+                "backbone:stage2:block00",
+                "backbone:stage4:block00",
+            ],
+        )
+
+    def test_select_representative_cam_feature_keys_returns_all_when_supported_layers_are_few(self) -> None:
+        adapter = TorchSegmentationModelAdapter(nn.Conv2d(1, 2, kernel_size=1), num_classes=2, device="cpu")
+
+        with patch(
+            "src.visualization.cam.discover_cam_supported_feature_keys",
+            return_value=["backbone:stage0:block00", "backbone:stage3:block00"],
+        ):
+            feature_keys = select_representative_cam_feature_keys(adapter, [])
+
+        self.assertEqual(feature_keys, ["backbone:stage0:block00", "backbone:stage3:block00"])
 
 
 if __name__ == "__main__":

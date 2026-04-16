@@ -172,12 +172,43 @@ FSPGD 是特征相似性驱动的 PGD。它不只看最终 logits，而是看中
 
 换句话说，FSPGD 不是只想把分类结果推错，而是想破坏干净特征内部的结构一致性。对于强调空间结构的分割模型，这类攻击有自己的针对性。
 
+## 16. RP-PGD
+
+RP-PGD 是 Region-and-Prototype based PGD。它的核心不是只对整张分割图做平均交叉熵，而是同时从区域和原型两个角度施压。
+
+区域部分会把像素分成三类：
+
+- `True Region`：当前仍然预测正确的像素
+- `False Region`：随机初始化后就已经预测错误的像素
+- `Boundary Region`：在迭代过程中从正确转为错误的像素
+
+然后用随迭代变化的权重去组合三类区域损失，从而优先打击还没被破坏掉的关键区域。
+
+原型部分会利用中间特征图：
+
+- 对当前 `True Region` 内、属于同一类别的像素求 prototype
+- 提高不同类别 prototype 的相似性，压缩类间间隔
+- 可选地加入类内项，控制像素特征与本类 prototype 的相似性
+
+因此它兼顾了：
+
+- 像素级错误扩散
+- 边界 / 真区域的阶段性破坏
+- 特征空间中的类间混淆
+
+当前仓库里的实现是基于官方公开仓库思路做的通用化接入：
+
+- 使用当前模型的 `forward_with_features`
+- 默认走 `Linf` PGD 更新
+- 通过 `extra.feature_key` 选择 prototype 用的特征层
+- 通过 `extra.intra_weight` 控制是否启用 RP-PGD++ 风格的类内项
+
 ## 总结
 
 如果从“为什么它们会越来越强”这个角度看，可以把这些方法理解成三条主线：
 
-- 更新更充分：`FGSM -> PGD -> SegPGD / CosPGD / SEA`
+- 更新更充分：`FGSM -> PGD -> SegPGD / CosPGD / SEA / RP-PGD`
 - 迁移性更强：`MI / NI / DI² / TI / NI+DI+TI`
-- 更贴近分割结构：`DAG / TASS / TranSegPGD / FSPGD`
+- 更贴近分割结构：`DAG / TASS / TranSegPGD / FSPGD / RP-PGD`
 
 前一类主要提升白盒破坏能力，后一类更多在想办法让扰动跨模型、跨结构也依然有效。对于语义分割，后两类通常比“直接把图像分类攻击搬过来”更合理。

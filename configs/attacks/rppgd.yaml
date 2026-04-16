@@ -1,0 +1,17 @@
+name: rppgd
+epsilon: 0.01568627450980392
+step_size: 0.00392156862745098
+steps: 10
+clamp_min: 0.0
+clamp_max: 1.0
+random_start: true
+targeted: false
+loss_name: cross_entropy
+ignore_index: 255
+extra:
+  feature_key: ""
+  prototype_similarity_threshold: 0.9
+  region_weight: 0.5
+  inter_weight: 0.25
+  intra_weight: 0.0
+  background_ids: [0]

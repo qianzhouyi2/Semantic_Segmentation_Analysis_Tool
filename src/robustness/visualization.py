@@ -116,6 +116,24 @@ def overlay_heatmap_on_image(
     return np.clip(blended, 0, 255).astype(np.uint8)
 
 
+def overlay_binary_mask_on_image(
+    image: np.ndarray,
+    mask: np.ndarray,
+    color: tuple[int, int, int] = (0, 255, 0),
+    alpha: float = 0.45,
+) -> np.ndarray:
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError(f"Expected RGB image with shape [H, W, 3], got {image.shape}.")
+    if mask.shape != image.shape[:2]:
+        raise ValueError(f"Mask shape {mask.shape} must match image shape {image.shape[:2]}.")
+
+    mask_array = np.asarray(mask, dtype=bool)
+    overlay = image.astype(np.float32).copy()
+    tint = np.asarray(color, dtype=np.float32)
+    overlay[mask_array] = (1.0 - alpha) * overlay[mask_array] + alpha * tint
+    return np.clip(overlay, 0, 255).astype(np.uint8)
+
+
 def summarize_image_delta(
     clean_image: torch.Tensor | np.ndarray,
     adversarial_image: torch.Tensor | np.ndarray,

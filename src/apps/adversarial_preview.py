@@ -9,7 +9,7 @@ import torch
 
 from src.attacks import AttackConfig, AttackOutput, AttackRunner
 from src.common.config import load_yaml, resolve_project_path
-from src.models import TorchSegmentationModelAdapter
+from src.models import TorchSegmentationModelAdapter, load_sparse_defense_config
 from src.robustness.visualization import (
     colorize_heatmap,
     normalize_perturbation,
@@ -42,6 +42,15 @@ class CheckpointOption:
     family: str
     label: str
     path: Path
+
+
+@dataclass(slots=True, frozen=True)
+class DefenseConfigOption:
+    variant: str
+    label: str
+    path: Path
+    family: str | None
+    threshold: float
 
 
 @dataclass(slots=True)
@@ -124,6 +133,32 @@ def discover_checkpoint_options(models_dir: str | Path = "models", include_known
         seen_paths.add(resolved)
 
     options.sort(key=lambda item: (item.family, item.label.lower()))
+    return options
+
+
+def discover_defense_config_options(config_dir: str | Path = "configs/defenses") -> list[DefenseConfigOption]:
+    directory = resolve_project_path(config_dir)
+    options: list[DefenseConfigOption] = []
+    if not directory.exists():
+        return options
+
+    for path in sorted(directory.glob("*.y*ml")):
+        try:
+            config = load_sparse_defense_config(path)
+        except (TypeError, ValueError):
+            continue
+        family_suffix = "" if config.family is None else f", family={config.family}"
+        options.append(
+            DefenseConfigOption(
+                variant=config.variant,
+                label=f"{path.stem} ({config.variant}, thr={config.threshold:.2f}{family_suffix})",
+                path=path.resolve(),
+                family=config.family,
+                threshold=float(config.threshold),
+            )
+        )
+
+    options.sort(key=lambda item: (item.variant, item.path.stem))
     return options
 
 

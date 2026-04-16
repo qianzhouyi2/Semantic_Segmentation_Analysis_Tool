@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 
 from src.models.architectures import UperNetForSemanticSegmentation, build_segmenter_vit_small_patch16_224
+from src.models.sparse import SparseDefenseConfig, apply_sparse_defense, load_sparse_defense_config
 
 
 MODEL_FAMILY_CHOICES = (
@@ -79,6 +80,8 @@ def build_model_from_checkpoint(
     num_classes: int = 21,
     map_location: str | torch.device = "cpu",
     strict: bool = True,
+    defense_config_path: str | Path | None = None,
+    defense_config: SparseDefenseConfig | dict[str, Any] | None = None,
 ) -> tuple[nn.Module, list[str], list[str]]:
     model = build_model(family=family, num_classes=num_classes)
     missing_keys, unexpected_keys = load_checkpoint(
@@ -87,4 +90,34 @@ def build_model_from_checkpoint(
         map_location=map_location,
         strict=strict,
     )
+    resolved_defense_config = _resolve_sparse_defense_config(
+        defense_config_path=defense_config_path,
+        defense_config=defense_config,
+    )
+    if resolved_defense_config is not None:
+        defense_info = apply_sparse_defense(
+            model,
+            family=family,
+            config=resolved_defense_config,
+            load_stats=True,
+        )
+        setattr(model, "_sparse_defense_info", defense_info)
     return model, missing_keys, unexpected_keys
+
+
+def _resolve_sparse_defense_config(
+    *,
+    defense_config_path: str | Path | None,
+    defense_config: SparseDefenseConfig | dict[str, Any] | None,
+) -> SparseDefenseConfig | None:
+    if defense_config_path is not None and defense_config is not None:
+        raise ValueError("Specify at most one of `defense_config_path` and `defense_config`.")
+    if defense_config_path is not None:
+        return load_sparse_defense_config(defense_config_path)
+    if defense_config is None:
+        return None
+    if isinstance(defense_config, SparseDefenseConfig):
+        return defense_config
+    if not isinstance(defense_config, dict):
+        raise TypeError(f"Unsupported sparse defense config type: {type(defense_config)!r}")
+    return SparseDefenseConfig.from_dict(defense_config)

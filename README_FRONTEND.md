@@ -6,7 +6,8 @@
 - 原图 / GT / prediction 三联图预览
 - Pascal VOC 单样本的对抗攻击预览
 - 逐层特征热图与 sample delta 热图可视化
-- 独立的 CAM 预览页面
+- CAM 预览
+- 响应区域分析模块
 
 ## 1. 启动方式
 
@@ -29,7 +30,7 @@ streamlit run app.py
 
 ## 2. 页面结构
 
-前端当前有 4 个主页签：
+前端当前有 5 个主页签：
 
 ### `Dataset Scan`
 
@@ -96,6 +97,22 @@ streamlit run app.py
 - `src/apps/adversarial_preview.py`
 - `src/visualization/cam.py`
 
+### `Response Region Analysis`
+
+用途：
+
+- 选择 Pascal VOC val 单样本
+- 选择模型 family 与 checkpoint
+- 选择攻击与对应 config
+- 设置扰动半径 `0-255`
+- 选择目标类别，查看 clean / adv 的输入响应热图
+- 提取高响应区域并展示 clean / adv 重叠区域
+
+核心代码：
+
+- `app.py`
+- `src/visualization/response_region.py`
+
 ## 3. 当前对抗预览交互
 
 对抗预览页的流程是：
@@ -122,7 +139,7 @@ streamlit run app.py
 
 ## 4. 当前 CAM 交互
 
-`CAM Preview` 页复用同一套样本、模型和攻击选择逻辑，但交互遵循常规 CAM 用法：
+`CAM Preview` 模块复用同一套样本、模型和攻击选择逻辑，但交互遵循常规 CAM 用法：
 
 1. 先运行一次单样本 clean / adversarial 预览
 2. 前端自动选取当前模型最深的可用 CAM 层
@@ -180,7 +197,26 @@ streamlit run app.py
 - 扰动主要集中在哪些区域
 - 当前攻击是不是只改了少量局部区域
 
-## 7. 缓存与状态
+## 7. 响应区域分析
+
+`Response Region Analysis` 模块与 CAM 模块一样复用单样本攻击预览流程，但方法落在输入空间而不是中间特征层：
+
+1. 先运行一次 clean / adversarial 单样本预览
+2. 选择目标类别
+3. 对该类别在当前预测区域上的平均 logit 求输入梯度
+4. 取梯度绝对值并对通道做平均，生成输入响应热图
+5. 按分位阈值提取高响应区域，并展示 clean / adv 的重叠区域
+
+模块会展示：
+
+- `Clean Response Heatmap`
+- `Adversarial Response Heatmap`
+- `Response Diff Heatmap`
+- `Clean High-Response Region`
+- `Adversarial High-Response Region`
+- `Stable Overlap Region`
+
+## 8. 缓存与状态
 
 前端目前用两类状态：
 
@@ -212,7 +248,7 @@ streamlit run app.py
 - 修改层滑条时复用上一次结果
 - 当样本 / 模型 / 攻击配置变更时提示“当前展示的是上一次运行结果”
 
-## 8. 前端开发建议
+## 9. 前端开发建议
 
 如果继续扩展前端，建议遵守下面的边界：
 
@@ -230,7 +266,7 @@ streamlit run app.py
 - 增加 clean / adv logits 或 attention 的对比页
 - 增加运行耗时与显存占用提示
 
-## 9. 常见问题
+## 10. 常见问题
 
 ### 页面里看不到模型 checkpoint
 

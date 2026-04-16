@@ -19,6 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a segmentation checkpoint on Pascal VOC clean validation data.")
     parser.add_argument("--family", required=True, choices=MODEL_FAMILY_CHOICES, help="Model family to instantiate.")
     parser.add_argument("--checkpoint", required=True, help="Checkpoint path.")
+    parser.add_argument("--defense-config", default="", help="Optional sparse defense YAML config.")
     parser.add_argument("--dataset-root", default="datasets", help="VOC dataset root that contains VOCdevkit/.")
     parser.add_argument("--output-dir", default="", help="Directory for outputs. Defaults to results/reports/voc_clean_eval/<checkpoint_stem>.")
     parser.add_argument("--batch-size", type=int, default=8, help="Evaluation batch size.")
@@ -45,7 +46,13 @@ def main() -> None:
     logger = setup_logger(f"voc_clean_eval.{checkpoint_path.stem}", output_dir / "evaluate.log")
     device = torch.device(args.device if args.device.startswith("cuda") and torch.cuda.is_available() else "cpu")
     logger.info("Starting VOC clean evaluation")
-    logger.info("family=%s checkpoint=%s device=%s", args.family, checkpoint_path.resolve(), device)
+    logger.info(
+        "family=%s checkpoint=%s device=%s defense_config=%s",
+        args.family,
+        checkpoint_path.resolve(),
+        device,
+        Path(args.defense_config).resolve() if args.defense_config else "<none>",
+    )
 
     dataset = PascalVOCValidationDataset(args.dataset_root, split="val", resize_short=473, crop_size=473)
     dataloader = DataLoader(
@@ -62,8 +69,10 @@ def main() -> None:
         num_classes=args.num_classes,
         map_location="cpu",
         strict=args.strict,
+        defense_config_path=args.defense_config or None,
     )
     logger.info("Checkpoint loaded: missing_keys=%d unexpected_keys=%d", len(missing_keys), len(unexpected_keys))
+    sparse_defense_info = getattr(model, "_sparse_defense_info", None)
     summary = evaluate_segmentation_model(
         model=model,
         dataloader=dataloader,
@@ -79,6 +88,8 @@ def main() -> None:
         "model": {
             "family": args.family,
             "checkpoint": str(checkpoint_path.resolve()),
+            "defense_config": str(Path(args.defense_config).resolve()) if args.defense_config else None,
+            "sparse_defense": sparse_defense_info,
             "missing_keys": missing_keys,
             "unexpected_keys": unexpected_keys,
         },
@@ -100,6 +111,11 @@ def main() -> None:
         [
             f"- family: {args.family}",
             f"- checkpoint: {checkpoint_path.resolve()}",
+            (
+                f"- defense_config: {Path(args.defense_config).resolve()}"
+                if args.defense_config
+                else "- defense_config: <none>"
+            ),
             f"- dataset_root: {Path(args.dataset_root).resolve()}",
             f"- processed_samples: {payload['processed_samples']}",
             f"- processed_batches: {payload['processed_batches']}",

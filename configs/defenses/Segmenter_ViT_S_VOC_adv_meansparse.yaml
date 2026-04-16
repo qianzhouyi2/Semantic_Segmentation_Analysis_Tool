@@ -1,0 +1,5 @@
+name: meansparse
+family: segmenter_vit_s
+threshold: 0.2
+stats_path: ../../models/defenses/meansparse/Segmenter_ViT_S_VOC_adv_meansparse_train.pt
+strict_stats: true

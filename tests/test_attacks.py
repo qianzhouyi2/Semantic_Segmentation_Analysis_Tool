@@ -196,6 +196,31 @@ class SegPGDAttackTest(unittest.TestCase):
         self.assertAlmostEqual(float(loss.item()), float(expected.item()), places=6)
 
 
+class RPPGDAttackTest(unittest.TestCase):
+    def test_rppgd_runs_with_generic_feature_map_fallback(self) -> None:
+        adapter = _build_toy_adapter()
+        runner = AttackRunner(adapter)
+        images = torch.full((1, 1, 2, 2), 0.9, dtype=torch.float32)
+        targets = torch.zeros((1, 2, 2), dtype=torch.long)
+        config = AttackConfig(
+            name="rppgd",
+            epsilon=0.2,
+            step_size=0.05,
+            steps=3,
+            random_start=True,
+            ignore_index=255,
+        )
+
+        output = runner.run(config, images, targets)
+
+        self.assertLessEqual(float(output.perturbation.abs().max().item()), 0.2 + 1e-6)
+        self.assertGreaterEqual(float(output.adversarial_images.min().item()), 0.0)
+        self.assertLessEqual(float(output.adversarial_images.max().item()), 1.0)
+        self.assertIn("region", output.metadata)
+        self.assertIn("prototype", output.metadata)
+        self.assertEqual(output.metadata["attack"], "rppgd")
+
+
 class AttackRegistrationTest(unittest.TestCase):
     def test_runner_supports_new_attack_variants(self) -> None:
         adapter = _build_toy_adapter()
@@ -214,6 +239,8 @@ class AttackRegistrationTest(unittest.TestCase):
             "tass",
             "transegpgd",
             "fspgd",
+            "rppgd",
+            "rp-pgd",
         )
 
         for attack_name in attack_names:

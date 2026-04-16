@@ -1,0 +1,5 @@
+name: extrasparse
+family: upernet_resnet50
+threshold: 0.25
+stats_path: ../../models/defenses/extrasparse/UperNet_ResNet50_VOC_clean_extrasparse_train.pt
+strict_stats: true

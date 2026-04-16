@@ -2,6 +2,7 @@
 models/*.pth
 models/*.pt
 models/*.ckpt
+models/defenses/
 !models/README.md
 
 # Local data links
@@ -34,3 +35,6 @@ results/reports/*
 !results/figures/.gitkeep
 !results/tables/.gitkeep
 !results/reports/.gitkeep
+
+# Local logs
+logs/

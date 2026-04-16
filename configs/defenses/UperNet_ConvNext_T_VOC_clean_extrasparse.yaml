@@ -1,0 +1,5 @@
+name: extrasparse
+family: upernet_convnext
+threshold: 0.25
+stats_path: ../../models/defenses/extrasparse/UperNet_ConvNext_T_VOC_clean_extrasparse_train.pt
+strict_stats: true

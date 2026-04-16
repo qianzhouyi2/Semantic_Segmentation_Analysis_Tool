@@ -11,6 +11,7 @@ from src.apps.adversarial_preview import (
     build_layer_visualization,
     discover_attack_config_options,
     discover_checkpoint_options,
+    discover_defense_config_options,
     generate_feature_preview,
 )
 from src.apps.dashboard import build_overview_cards
@@ -23,7 +24,8 @@ from src.datasets.stats import compute_class_statistics
 from src.datasets.voc import PascalVOCValidationDataset
 from src.io.image_io import DEFAULT_IMAGE_SUFFIXES, DEFAULT_MASK_SUFFIXES
 from src.models import MODEL_FAMILY_CHOICES, TorchSegmentationModelAdapter, build_model_from_checkpoint
-from src.visualization.cam import build_cam_visualization, select_default_cam_feature_key
+from src.visualization.cam import build_cam_visualization, select_representative_cam_feature_keys
+from src.visualization.response_region import build_response_region_visualization
 from src.visualization.triplet import discover_triplet_samples, overlay_mask, render_triplet_from_paths
 
 
@@ -51,6 +53,13 @@ def _default_pascal_voc_config_paths() -> tuple[Path, Path]:
     return Path("configs/datasets/pascal_voc.yaml"), Path("configs/labels/pascal_voc.yaml")
 
 
+def _resolve_pascal_voc_label_config_path(default_label_config_path: str) -> str:
+    _, voc_label_config_path = _default_pascal_voc_config_paths()
+    if voc_label_config_path.exists():
+        return str(voc_label_config_path)
+    return default_label_config_path
+
+
 @st.cache_resource(show_spinner=False)
 def _load_voc_validation_dataset(dataset_root: str) -> PascalVOCValidationDataset:
     return PascalVOCValidationDataset(dataset_root, split="val", resize_short=473, crop_size=473)
@@ -60,21 +69,24 @@ def _load_voc_validation_dataset(dataset_root: str) -> PascalVOCValidationDatase
 def _load_model_adapter(
     family: str,
     checkpoint_path: str,
+    defense_config_path: str,
     num_classes: int,
     device: str,
     strict: bool,
-) -> tuple[TorchSegmentationModelAdapter, tuple[str, ...], tuple[str, ...]]:
+) -> tuple[TorchSegmentationModelAdapter, tuple[str, ...], tuple[str, ...], dict[str, object] | None]:
     model, missing_keys, unexpected_keys = build_model_from_checkpoint(
         family=family,
         checkpoint_path=checkpoint_path,
         num_classes=num_classes,
         map_location="cpu",
         strict=strict,
+        defense_config_path=defense_config_path or None,
     )
     return (
         TorchSegmentationModelAdapter(model=model, num_classes=num_classes, device=device),
         tuple(missing_keys),
         tuple(unexpected_keys),
+        getattr(model, "_sparse_defense_info", None),
     )
 
 
@@ -253,7 +265,7 @@ def _render_dataset_triplet_preview(
 def _render_pascal_voc_triplet_preview(default_label_config_path: str):
     voc_dataset_config_path, voc_label_config_path = _default_pascal_voc_config_paths()
     dataset_config_path = str(voc_dataset_config_path) if voc_dataset_config_path.exists() else ""
-    label_config_path = str(voc_label_config_path) if voc_label_config_path.exists() else default_label_config_path
+    label_config_path = _resolve_pascal_voc_label_config_path(default_label_config_path)
 
     dataset_root = st.text_input("VOC dataset root", "datasets")
     prediction_dir_text = st.text_input("VOC prediction directory", "")
@@ -348,6 +360,7 @@ def _prepare_adversarial_preview(
         return None, None, None, None, None
 
     checkpoint_options = discover_checkpoint_options()
+    defense_options = discover_defense_config_options()
     attack_options = discover_attack_config_options()
     attack_names = sorted({option.attack_name for option in attack_options})
     if not attack_names:
@@ -376,6 +389,38 @@ def _prepare_adversarial_preview(
         else:
             st.warning("No checkpoint was auto-discovered for this family. Enter a checkpoint path manually.")
             checkpoint_path = st.text_input("Checkpoint path", "", key=f"{state_prefix}_checkpoint_path")
+
+        family_defense_options = [option for option in defense_options if option.family in {None, family}]
+        defense_mode_options = ["<none>"]
+        if family_defense_options:
+            defense_mode_options.append("<auto>")
+        defense_mode_options.append("<manual>")
+        defense_mode = st.selectbox(
+            "稀疏防御配置",
+            options=defense_mode_options,
+            format_func=lambda value: {
+                "<none>": "不使用",
+                "<auto>": "自动发现配置",
+                "<manual>": "手动输入路径",
+            }[value],
+            key=f"{state_prefix}_defense_mode",
+        )
+        defense_config_path = ""
+        if defense_mode == "<auto>":
+            defense_choice = st.selectbox(
+                "防御配置文件",
+                options=range(len(family_defense_options)),
+                format_func=lambda index: family_defense_options[index].label,
+                key=f"{state_prefix}_defense_choice",
+            )
+            defense_config_path = str(family_defense_options[defense_choice].path)
+            st.caption(f"Defense config: {defense_config_path}")
+        elif defense_mode == "<manual>":
+            defense_config_path = st.text_input("Defense config path", "", key=f"{state_prefix}_defense_config_path")
+            if family_defense_options:
+                st.caption(f"已自动发现 {len(family_defense_options)} 个与当前 family 兼容的防御配置。")
+            else:
+                st.caption("当前未自动发现与该 family 兼容的防御配置，请手动输入。")
 
     with control_right:
         attack_name = st.selectbox("攻击", attack_names, key=f"{state_prefix}_attack_name")
@@ -418,6 +463,7 @@ def _prepare_adversarial_preview(
         "sample_index": int(sample_index),
         "family": family,
         "checkpoint_path": checkpoint_path,
+        "defense_config_path": defense_config_path,
         "attack_config_path": str(attack_config_path),
         "radius_255": int(radius_255),
         "device": device,
@@ -432,12 +478,19 @@ def _prepare_adversarial_preview(
         if not checkpoint_candidate.exists():
             st.error("Checkpoint path does not exist.")
             return None, None, None, None, None
+        defense_config_candidate = None
+        if defense_config_path.strip():
+            defense_config_candidate = Path(defense_config_path.strip())
+            if not defense_config_candidate.exists():
+                st.error("Defense config path does not exist.")
+                return None, None, None, None, None
 
         with st.spinner("Loading model and generating preview..."):
             try:
-                adapter, missing_keys, unexpected_keys = _load_model_adapter(
+                adapter, missing_keys, unexpected_keys, sparse_defense_info = _load_model_adapter(
                     family=family,
                     checkpoint_path=str(checkpoint_candidate),
+                    defense_config_path=str(defense_config_candidate) if defense_config_candidate is not None else "",
                     num_classes=21,
                     device=device,
                     strict=strict,
@@ -461,6 +514,10 @@ def _prepare_adversarial_preview(
             "missing_keys": list(missing_keys),
             "unexpected_keys": list(unexpected_keys),
             "checkpoint_path": str(checkpoint_candidate.resolve()),
+            "defense_config_path": (
+                str(defense_config_candidate.resolve()) if defense_config_candidate is not None else None
+            ),
+            "sparse_defense_info": sparse_defense_info,
             "family": family,
         }
 
@@ -487,6 +544,18 @@ def _render_preview_summary(preview_result, checkpoint_info: dict[str, object], 
             [
                 f"Family: {checkpoint_info.get('family', family)}",
                 f"Checkpoint: {checkpoint_info.get('checkpoint_path', checkpoint_path)}",
+                (
+                    f"Defense config: {checkpoint_info.get('defense_config_path')}"
+                    if checkpoint_info.get("defense_config_path")
+                    else "Defense config: <none>"
+                ),
+                (
+                    "Sparse defense: "
+                    f"{checkpoint_info.get('sparse_defense_info', {}).get('variant')} "
+                    f"(threshold={checkpoint_info.get('sparse_defense_info', {}).get('threshold', 0.0):.4f})"
+                    if checkpoint_info.get("sparse_defense_info")
+                    else "Sparse defense: <none>"
+                ),
                 f"Missing keys: {len(checkpoint_info.get('missing_keys', []))}",
                 f"Unexpected keys: {len(checkpoint_info.get('unexpected_keys', []))}",
             ]
@@ -512,6 +581,7 @@ def _render_preview_images(preview_result, label_config_path: str) -> None:
 
 
 def _render_adversarial_feature_preview(label_config_path: str) -> None:
+    resolved_label_config_path = _resolve_pascal_voc_label_config_path(label_config_path)
     preview_result, checkpoint_info, _stored_signature, family, checkpoint_path = _prepare_adversarial_preview(
         state_prefix="adv",
         section_caption="基于 Pascal VOC val 单样本执行攻击，并在前端查看逐层特征变化。",
@@ -521,7 +591,7 @@ def _render_adversarial_feature_preview(label_config_path: str) -> None:
         return
 
     _render_preview_summary(preview_result, checkpoint_info, family, checkpoint_path)
-    _render_preview_images(preview_result, label_config_path)
+    _render_preview_images(preview_result, resolved_label_config_path)
 
     if not preview_result.layer_names:
         st.warning("The selected model did not return any feature layers for visualization.")
@@ -560,6 +630,7 @@ def _render_adversarial_feature_preview(label_config_path: str) -> None:
 
 
 def _render_cam_preview(label_config_path: str) -> None:
+    resolved_label_config_path = _resolve_pascal_voc_label_config_path(label_config_path)
     preview_result, checkpoint_info, stored_signature, family, checkpoint_path = _prepare_adversarial_preview(
         state_prefix="cam_preview",
         section_caption="基于 Pascal VOC val 单样本执行攻击，并单独查看类激活图（CAM）。",
@@ -569,21 +640,22 @@ def _render_cam_preview(label_config_path: str) -> None:
         return
 
     _render_preview_summary(preview_result, checkpoint_info, family, checkpoint_path)
-    _render_preview_images(preview_result, label_config_path)
+    _render_preview_images(preview_result, resolved_label_config_path)
 
-    adapter, _, _ = _load_model_adapter(
+    adapter, _, _, _ = _load_model_adapter(
         family=checkpoint_info.get("family", family),
         checkpoint_path=checkpoint_info.get("checkpoint_path", checkpoint_path),
+        defense_config_path=str(checkpoint_info.get("defense_config_path") or ""),
         num_classes=21,
         device=stored_signature.get("device", "cpu"),
         strict=bool(stored_signature.get("strict", True)),
     )
-    cam_feature_key = select_default_cam_feature_key(adapter, preview_result.layer_names)
-    if cam_feature_key is None:
+    cam_feature_keys = select_representative_cam_feature_keys(adapter, preview_result.layer_names, max_keys=3)
+    if not cam_feature_keys:
         st.info("CAM 当前只支持返回 4D 特征图的层。当前模型没有可用的 CAM 层。")
         return
 
-    label_config = _optional_label_config(label_config_path)
+    label_config = _optional_label_config(resolved_label_config_path)
     class_names = label_config.class_names if label_config else {}
     background_ids = label_config.background_ids if label_config else (0,)
     if class_names:
@@ -609,50 +681,219 @@ def _render_cam_preview(label_config_path: str) -> None:
         key="cam_preview_class_id",
     )
 
-    st.caption(f"CAM 使用默认最深层: {cam_feature_key}")
+    if len(cam_feature_keys) == 1:
+        st.caption(f"CAM 自动输出当前唯一可用层: {cam_feature_keys[0]}")
+    elif len(cam_feature_keys) == 2:
+        st.caption(f"CAM 自动输出两层代表层: 浅层={cam_feature_keys[0]} | 深层={cam_feature_keys[1]}")
+    else:
+        st.caption(
+            "CAM 自动输出三层代表层: "
+            f"浅层={cam_feature_keys[0]} | 中层={cam_feature_keys[1]} | 深层={cam_feature_keys[2]}"
+        )
 
     cam_signature = {
         **stored_signature,
-        "cam_feature_key": cam_feature_key,
+        "cam_feature_keys": tuple(cam_feature_keys),
         "cam_class_id": int(cam_class_id),
     }
     if st.session_state.get("cam_preview_cam_signature") != cam_signature:
         with st.spinner("Computing CAM..."):
             try:
-                cam_result = build_cam_visualization(
-                    model=adapter,
-                    clean_tensor=preview_result.clean_tensor,
-                    adversarial_tensor=preview_result.adversarial_tensor,
-                    clean_image=preview_result.clean_image,
-                    adversarial_image=preview_result.adversarial_image,
-                    feature_key=cam_feature_key,
-                    class_id=int(cam_class_id),
-                )
+                cam_results = [
+                    build_cam_visualization(
+                        model=adapter,
+                        clean_tensor=preview_result.clean_tensor,
+                        adversarial_tensor=preview_result.adversarial_tensor,
+                        clean_image=preview_result.clean_image,
+                        adversarial_image=preview_result.adversarial_image,
+                        feature_key=feature_key,
+                        class_id=int(cam_class_id),
+                    )
+                    for feature_key in cam_feature_keys
+                ]
             except Exception as exc:  # pragma: no cover - surfaced in UI
                 st.error(str(exc))
                 st.exception(exc)
                 return
-        st.session_state["cam_preview_cam_result"] = cam_result
+        st.session_state["cam_preview_cam_results"] = cam_results
         st.session_state["cam_preview_cam_signature"] = cam_signature
 
-    cam_result = st.session_state.get("cam_preview_cam_result")
-    if cam_result is None:
+    cam_results = st.session_state.get("cam_preview_cam_results")
+    if not cam_results:
         return
 
-    cam_columns = st.columns(3)
-    cam_columns[0].image(
-        cam_result.clean_overlay,
-        caption=f"Clean CAM | mean={cam_result.clean_mean:.4f} pixels={cam_result.clean_target_pixels}",
+    layer_labels = ["浅层", "中层", "深层"]
+    if len(cam_results) == 1:
+        layer_labels = ["可用层"]
+    elif len(cam_results) == 2:
+        layer_labels = ["浅层", "深层"]
+
+    for layer_label, cam_result in zip(layer_labels, cam_results, strict=True):
+        st.caption(f"{layer_label} CAM 层: {cam_result.feature_key}")
+        cam_columns = st.columns(3)
+        cam_columns[0].image(
+            cam_result.clean_overlay,
+            caption=f"Clean CAM | mean={cam_result.clean_mean:.4f} pixels={cam_result.clean_target_pixels}",
+            use_container_width=True,
+        )
+        cam_columns[1].image(
+            cam_result.adversarial_overlay,
+            caption=f"Adv CAM | mean={cam_result.adversarial_mean:.4f} pixels={cam_result.adversarial_target_pixels}",
+            use_container_width=True,
+        )
+        cam_columns[2].image(
+            cam_result.diff_image,
+            caption=f"CAM Diff | mean={cam_result.diff_mean:.4f}",
+            use_container_width=True,
+        )
+
+
+def _discover_response_class_ids(preview_result, label_config_path: str) -> tuple[list[int], dict[int, str], tuple[int, ...]]:
+    label_config = _optional_label_config(label_config_path)
+    class_names = label_config.class_names if label_config else {}
+    background_ids = label_config.background_ids if label_config else (0,)
+    if label_config is not None:
+        class_ids = list(label_config.class_ids)
+    else:
+        class_ids = sorted(
+            {
+                *np.unique(preview_result.ground_truth).tolist(),
+                *np.unique(preview_result.clean_prediction).tolist(),
+                *np.unique(preview_result.adversarial_prediction).tolist(),
+            }
+        )
+    return class_ids, class_names, background_ids
+
+
+def _render_response_region_preview(label_config_path: str) -> None:
+    resolved_label_config_path = _resolve_pascal_voc_label_config_path(label_config_path)
+    preview_result, checkpoint_info, stored_signature, family, checkpoint_path = _prepare_adversarial_preview(
+        state_prefix="response_region",
+        section_caption="基于 Pascal VOC val 单样本执行攻击，并分析目标类别在输入空间的响应区域。",
+        run_button_label="运行响应区域分析",
+    )
+    if preview_result is None:
+        return
+
+    _render_preview_summary(preview_result, checkpoint_info, family, checkpoint_path)
+    _render_preview_images(preview_result, resolved_label_config_path)
+
+    class_ids, class_names, background_ids = _discover_response_class_ids(preview_result, resolved_label_config_path)
+    default_class_id = _default_cam_class_id(preview_result, background_ids=background_ids)
+    if st.session_state.get("response_region_default_class_initialized") != preview_result.sample_id:
+        st.session_state["response_region_default_class_initialized"] = preview_result.sample_id
+        st.session_state["response_region_class_id"] = default_class_id
+
+    control_left, control_right = st.columns(2)
+    with control_left:
+        class_id = st.selectbox(
+            "响应目标类别",
+            options=class_ids,
+            format_func=lambda value: class_names.get(int(value), f"class_{value}"),
+            key="response_region_class_id",
+        )
+    with control_right:
+        threshold_percentile = st.slider(
+            "响应区域分位阈值",
+            min_value=50,
+            max_value=99,
+            value=85,
+            step=1,
+            help="仅保留响应热图中高于该分位阈值的像素作为响应区域。",
+        )
+
+    st.caption(
+        "响应得分定义为目标类别在当前预测区域上的平均 logit；如果该类别当前没有预测像素，则回退为整张图上的该类平均 logit。"
+    )
+
+    response_signature = {
+        **stored_signature,
+        "class_id": int(class_id),
+        "threshold_percentile": int(threshold_percentile),
+    }
+    if st.session_state.get("response_region_signature") != response_signature:
+        with st.spinner("Computing response regions..."):
+            adapter, _, _, _ = _load_model_adapter(
+                family=checkpoint_info.get("family", family),
+                checkpoint_path=checkpoint_info.get("checkpoint_path", checkpoint_path),
+                defense_config_path=str(checkpoint_info.get("defense_config_path") or ""),
+                num_classes=21,
+                device=stored_signature.get("device", "cpu"),
+                strict=bool(stored_signature.get("strict", True)),
+            )
+            response_result = build_response_region_visualization(
+                model=adapter,
+                clean_tensor=preview_result.clean_tensor,
+                adversarial_tensor=preview_result.adversarial_tensor,
+                clean_image=preview_result.clean_image,
+                adversarial_image=preview_result.adversarial_image,
+                class_id=int(class_id),
+                threshold_percentile=int(threshold_percentile),
+            )
+
+        st.session_state["response_region_result"] = response_result
+        st.session_state["response_region_signature"] = response_signature
+
+    response_result = st.session_state.get("response_region_result")
+    if response_result is None:
+        return
+
+    metric_columns = st.columns(6)
+    metric_columns[0].metric("Clean Mean", f"{response_result.clean_mean:.4f}")
+    metric_columns[1].metric("Adv Mean", f"{response_result.adversarial_mean:.4f}")
+    metric_columns[2].metric("Diff Mean", f"{response_result.diff_mean:.4f}")
+    metric_columns[3].metric("Clean Area", f"{response_result.clean_active_ratio * 100.0:.1f}%")
+    metric_columns[4].metric("Adv Area", f"{response_result.adversarial_active_ratio * 100.0:.1f}%")
+    metric_columns[5].metric("Overlap IoU", f"{response_result.overlap_iou:.3f}")
+
+    st.caption(
+        "\n".join(
+            [
+                f"Clean target pixels: {response_result.clean_target_pixels} | score={response_result.clean_score:.4f}",
+                (
+                    f"Adv target pixels: {response_result.adversarial_target_pixels} "
+                    f"| score={response_result.adversarial_score:.4f}"
+                ),
+                (
+                    f"Threshold percentile: {response_result.threshold_percentile} "
+                    f"| clean_peak={response_result.clean_peak:.4f} "
+                    f"| adv_peak={response_result.adversarial_peak:.4f}"
+                ),
+            ]
+        )
+    )
+
+    heatmap_columns = st.columns(3)
+    heatmap_columns[0].image(
+        response_result.clean_overlay,
+        caption="Clean Response Heatmap",
         use_container_width=True,
     )
-    cam_columns[1].image(
-        cam_result.adversarial_overlay,
-        caption=f"Adv CAM | mean={cam_result.adversarial_mean:.4f} pixels={cam_result.adversarial_target_pixels}",
+    heatmap_columns[1].image(
+        response_result.adversarial_overlay,
+        caption="Adversarial Response Heatmap",
         use_container_width=True,
     )
-    cam_columns[2].image(
-        cam_result.diff_image,
-        caption=f"CAM Diff | mean={cam_result.diff_mean:.4f}",
+    heatmap_columns[2].image(
+        response_result.diff_overlay,
+        caption="Response Diff Heatmap",
+        use_container_width=True,
+    )
+
+    region_columns = st.columns(3)
+    region_columns[0].image(
+        response_result.clean_region_overlay,
+        caption="Clean High-Response Region",
+        use_container_width=True,
+    )
+    region_columns[1].image(
+        response_result.adversarial_region_overlay,
+        caption="Adversarial High-Response Region",
+        use_container_width=True,
+    )
+    region_columns[2].image(
+        response_result.overlap_region_overlay,
+        caption="Stable Overlap Region",
         use_container_width=True,
     )
 
@@ -660,14 +901,22 @@ def _render_cam_preview(label_config_path: str) -> None:
 def main() -> None:
     st.set_page_config(page_title="语义分割分析工具", layout="wide")
     st.title("语义分割分析工具")
-    st.caption("数据集扫描、类别统计、语义分割预览、对抗特征可视化，以及独立的 CAM 页面。")
+    st.caption("数据集扫描、类别统计、语义分割预览、对抗特征可视化、CAM 预览与响应区域分析。")
 
-    dataset_config_path = st.sidebar.text_input("Dataset config", "configs/datasets/example.yaml")
-    label_config_path = st.sidebar.text_input("Label config", "configs/labels/example.yaml")
+    dataset_config_path = st.sidebar.text_input(
+        "Dataset config",
+        "configs/datasets/example.yaml",
+        key="global_dataset_config_path",
+    )
+    label_config_path = st.sidebar.text_input(
+        "Label config",
+        "configs/labels/example.yaml",
+        key="global_label_config_path",
+    )
     default_image_dir, default_mask_dir, _, _ = _resolve_dataset_inputs(dataset_config_path, "datasets/images", "datasets/masks")
 
-    scan_tab, preview_tab, adversarial_tab, cam_tab = st.tabs(
-        ["Dataset Scan", "Triplet Preview", "Adversarial Feature Preview", "CAM Preview"]
+    scan_tab, preview_tab, adversarial_tab, cam_tab, response_tab = st.tabs(
+        ["Dataset Scan", "Triplet Preview", "Adversarial Feature Preview", "CAM Preview", "Response Region Analysis"]
     )
 
     with scan_tab:
@@ -705,6 +954,9 @@ def main() -> None:
 
     with cam_tab:
         _render_cam_preview(label_config_path)
+
+    with response_tab:
+        _render_response_region_preview(label_config_path)
 
 
 if __name__ == "__main__":
