@@ -477,6 +477,27 @@ python scripts/materialize_voc_transfer_protocol_manifest.py \
   --variants all
 ```
 
+如果希望把更强的 segmentation transfer attack 一起纳入协议，可以直接显式指定：
+
+```bash
+python scripts/materialize_voc_transfer_protocol_manifest.py \
+  --search-root results/reports/sparse_search \
+  --output-dir results/reports/voc_transfer_protocol_manifest \
+  --variants all \
+  --attack-stems mi_fgsm,ni_di_ti,transegpgd
+```
+
+`--attack-stems` 默认仍保持旧协议兼容，即 `mi_fgsm,ni_di_ti`。
+
+transfer protocol 汇总目录现在会额外生成：
+
+- `transfer_protocol_summary.json`
+- `transfer_protocol_cases.csv`
+- `transfer_protocol_targets.csv`
+- `transfer_protocol_tables.md`
+- `transfer_protocol_worstcase.json`
+- `transfer_protocol_worstcase.csv`
+
 ## 输出目录约定
 
 常见输出位置如下：

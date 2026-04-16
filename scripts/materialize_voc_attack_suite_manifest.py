@@ -12,7 +12,11 @@ from src.common.sparse_workflow import (
     resolve_sparse_config_from_search_summary,
     serialize_sparse_defense_config,
 )
-from src.common.voc_protocol import VOC_ATTACK_SUITE_TRANSFER_SOURCE_BY_FAMILY, VOC_BASE_MODELS
+from src.common.voc_protocol import (
+    VOC_ATTACK_SUITE_TRANSFER_SOURCE_BY_FAMILY,
+    VOC_BASE_MODELS,
+    VOC_DEFAULT_TRANSFER_ATTACK_STEMS,
+)
 from src.reporting.exporter import write_json, write_markdown
 
 
@@ -117,7 +121,7 @@ def build_manifest(search_root: Path, output_dir: Path, variants: list[str]) -> 
         "requested_sparse_variants": variants,
         "num_models": len(models),
         "whitebox_attacks": ["pgd", "segpgd"],
-        "blackbox_transfer_attacks": ["mi_fgsm", "ni_di_ti"],
+        "blackbox_transfer_attacks": list(VOC_DEFAULT_TRANSFER_ATTACK_STEMS),
         "models": models,
         "written_defense_configs": [str(path.resolve()) for path in written_configs],
     }

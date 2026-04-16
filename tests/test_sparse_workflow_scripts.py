@@ -22,7 +22,7 @@ import materialize_voc_attack_suite_manifest
 import materialize_voc_transfer_protocol_manifest
 import search_sparse_thresholds
 from src.common.sparse_workflow import parse_sparse_variants, resolve_sparse_defense_config
-from src.common.voc_protocol import VOC_BASE_MODELS
+from src.common.voc_protocol import VOC_BASE_MODELS, VOC_DEFAULT_TRANSFER_ATTACK_STEMS, resolve_transfer_attacks
 
 
 class SparseWorkflowScriptsTest(unittest.TestCase):
@@ -198,6 +198,43 @@ class SparseWorkflowScriptsTest(unittest.TestCase):
             self.assertTrue(any(row["variant"] == "margin_extra_sparse" for row in models))
             self.assertTrue(all(len(case["targets"]) == 2 for case in cases))
             self.assertTrue(all(case["targets"][1]["variant"] == "margin_extra_sparse" for case in cases))
+
+    def test_transfer_manifest_defaults_keep_legacy_attack_subset(self) -> None:
+        stems = materialize_voc_transfer_protocol_manifest.parse_attack_stems(None)
+        self.assertEqual(stems, list(VOC_DEFAULT_TRANSFER_ATTACK_STEMS))
+
+        attacks = resolve_transfer_attacks(stems)
+        self.assertEqual([attack["stem"] for attack in attacks], list(VOC_DEFAULT_TRANSFER_ATTACK_STEMS))
+
+    def test_transfer_manifest_attack_stems_are_configurable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            search_root = root / "search"
+            output_dir = root / "transfer_manifest"
+            self._populate_search_root(search_root, ["meansparse"])
+
+            models, _ = materialize_voc_transfer_protocol_manifest.build_models(
+                search_root,
+                output_dir,
+                ["meansparse"],
+            )
+            transfer_attacks = resolve_transfer_attacks(["mi_fgsm", "transegpgd"])
+            cases = materialize_voc_transfer_protocol_manifest.build_cases(
+                models,
+                ["meansparse"],
+                transfer_attacks=transfer_attacks,
+            )
+
+            baseline_sources = [row for row in models if row["variant"] == "baseline"]
+            expected_cases_per_attack = sum(
+                len({row["display_name"] for row in models if row["regime"] == source["regime"]})
+                for source in baseline_sources
+            )
+            self.assertEqual(len(cases), len(transfer_attacks) * expected_cases_per_attack)
+            self.assertEqual({case["attack_stem"] for case in cases}, {"mi_fgsm", "transegpgd"})
+            transegpgd_case = next(case for case in cases if case["attack_stem"] == "transegpgd")
+            self.assertTrue(transegpgd_case["case_id"].startswith("transegpgd__"))
+            self.assertTrue(transegpgd_case["attack_config"].endswith("configs/attacks/transegpgd.yaml"))
 
     def test_parse_sparse_variants_default_keeps_legacy_subset(self) -> None:
         self.assertEqual(parse_sparse_variants(None), ["meansparse", "extrasparse"])

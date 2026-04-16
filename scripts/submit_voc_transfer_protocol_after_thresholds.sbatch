@@ -18,6 +18,7 @@ FEISHU_BRIDGE="${FEISHU_BRIDGE:-${HOME}/tools/feishu/interactive_bridge.py}"
 SEARCH_ROOT="${SEARCH_ROOT:?SEARCH_ROOT is required}"
 SUITE_ROOT="${SUITE_ROOT:?SUITE_ROOT is required}"
 DATASET_ROOT="${DATASET_ROOT:-datasets}"
+ATTACK_STEMS="${ATTACK_STEMS:-mi_fgsm ni_di_ti}"
 EPSILON_SCALE="${EPSILON_SCALE:-1.0}"
 EPSILON_RADIUS_255="${EPSILON_RADIUS_255:-}"
 ATTACK_BACKWARD_MODE="${ATTACK_BACKWARD_MODE:-default}"
@@ -68,7 +69,8 @@ mkdir -p "${SUITE_ROOT}"
 feishu_notify "${SLURM_JOB_ID:-nojob}:start transfer-protocol launcher"
 python scripts/materialize_voc_transfer_protocol_manifest.py \
   --search-root "${SEARCH_ROOT}" \
-  --output-dir "${SUITE_ROOT}"
+  --output-dir "${SUITE_ROOT}" \
+  --attack-stems "${ATTACK_STEMS}"
 
 launch_args=(
   --manifest "${SUITE_ROOT}/transfer_protocol_manifest.json"
