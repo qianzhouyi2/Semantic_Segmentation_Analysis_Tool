@@ -144,7 +144,7 @@ datasets/
         └── ImageSets/Segmentation/val.txt
 ```
 
-本地模型权重放在 `models/`。默认不要提交 `.pt`、`.pth`、`.ckpt` 大文件；如果需要共享权重，建议使用 Git LFS 或外部存储。
+本地模型权重放在 `models/`。
 
 ## 快速开始
 
