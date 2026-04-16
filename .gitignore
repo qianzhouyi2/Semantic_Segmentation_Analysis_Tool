@@ -6,8 +6,9 @@ models/defenses/
 !models/README.md
 
 # Local data links
-datasets
+/datasets
 AGENTS.md
+gpt_pro_advice
 
 # Python
 __pycache__/
