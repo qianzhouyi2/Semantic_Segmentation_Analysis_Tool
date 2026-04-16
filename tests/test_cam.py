@@ -74,10 +74,36 @@ class CamVisualizationTest(unittest.TestCase):
             model.weight.copy_(torch.tensor([[[[2.0]]], [[[-2.0]]]]))
             model.bias.copy_(torch.tensor([0.5, -0.5]))
         adapter = TorchSegmentationModelAdapter(model=model, num_classes=2, device="cpu")
-        clean_tensor = torch.full((1, 4, 4), 0.75, dtype=torch.float32)
-        adversarial_tensor = torch.full((1, 4, 4), 0.65, dtype=torch.float32)
+        clean_tensor = torch.tensor(
+            [
+                [1.0, 0.9, 0.8, 0.7],
+                [0.9, 0.8, 0.7, 0.6],
+                [0.4, 0.3, 0.2, 0.1],
+                [0.3, 0.2, 0.1, 0.0],
+            ],
+            dtype=torch.float32,
+        ).unsqueeze(0)
+        adversarial_tensor = torch.flip(clean_tensor, dims=(1,))
         clean_image = torch.full((4, 4, 3), 128, dtype=torch.uint8).numpy()
         adversarial_image = torch.full((4, 4, 3), 112, dtype=torch.uint8).numpy()
+        ground_truth = torch.tensor(
+            [
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+                [1, 1, 1, 1],
+                [1, 1, 1, 1],
+            ],
+            dtype=torch.int64,
+        ).numpy()
+        clean_prediction = torch.tensor(
+            [
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+                [1, 1, 1, 1],
+                [1, 1, 1, 1],
+            ],
+            dtype=torch.int64,
+        ).numpy()
 
         payload = build_cam_visualization(
             model=adapter,
@@ -87,12 +113,20 @@ class CamVisualizationTest(unittest.TestCase):
             adversarial_image=adversarial_image,
             feature_key="logits",
             class_id=0,
+            ground_truth=ground_truth,
+            clean_prediction=clean_prediction,
         )
 
         self.assertEqual(payload.clean_overlay.shape, (4, 4, 3))
         self.assertEqual(payload.adversarial_overlay.shape, (4, 4, 3))
         self.assertEqual(payload.diff_image.shape, (4, 4, 3))
         self.assertGreaterEqual(payload.diff_mean, 0.0)
+        self.assertGreater(payload.clean_top20_area_ratio, 0.0)
+        self.assertGreater(payload.adversarial_top20_area_ratio, 0.0)
+        self.assertGreater(payload.clean_inside_gt_ratio, payload.adversarial_inside_gt_ratio)
+        self.assertGreater(payload.clean_inside_clean_prediction_ratio, payload.adversarial_inside_clean_prediction_ratio)
+        self.assertIsNotNone(payload.centroid_shift)
+        self.assertGreater(float(payload.centroid_shift or 0.0), 0.0)
 
     def test_discover_cam_supported_feature_keys_prefers_backbone_stage_keys_by_name(self) -> None:
         adapter = TorchSegmentationModelAdapter(nn.Conv2d(1, 2, kernel_size=1), num_classes=2, device="cpu")

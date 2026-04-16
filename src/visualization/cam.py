@@ -22,8 +22,15 @@ class CamVisualizationResult:
     clean_mean: float
     adversarial_mean: float
     diff_mean: float
-    clean_target_pixels: int
-    adversarial_target_pixels: int
+    clean_pred_pixels: int
+    adversarial_pred_pixels: int
+    clean_top20_area_ratio: float
+    adversarial_top20_area_ratio: float
+    clean_inside_gt_ratio: float
+    adversarial_inside_gt_ratio: float
+    clean_inside_clean_prediction_ratio: float
+    adversarial_inside_clean_prediction_ratio: float
+    centroid_shift: float | None
 
 
 def discover_cam_supported_feature_keys(
@@ -219,6 +226,49 @@ def _supports_segmenter_cam(model: object) -> bool:
     )
 
 
+def _build_top_activation_mask(heatmap: np.ndarray, top_percent: int = 20) -> np.ndarray:
+    if heatmap.ndim != 2:
+        raise ValueError(f"Expected heatmap with shape [H, W], got {heatmap.shape}.")
+    if heatmap.size == 0:
+        return np.zeros_like(heatmap, dtype=bool)
+    if float(heatmap.max()) <= 0.0:
+        return np.zeros_like(heatmap, dtype=bool)
+
+    clipped_top_percent = int(np.clip(int(top_percent), 0, 100))
+    threshold_percentile = max(0, 100 - clipped_top_percent)
+    threshold = float(np.percentile(heatmap, threshold_percentile))
+    return heatmap >= threshold
+
+
+def _mask_inside_ratio(region_mask: np.ndarray, reference_mask: np.ndarray) -> float:
+    region = np.asarray(region_mask, dtype=bool)
+    reference = np.asarray(reference_mask, dtype=bool)
+    if region.shape != reference.shape:
+        raise ValueError(f"Mask shape mismatch: {region.shape} vs {reference.shape}.")
+    region_area = int(region.sum())
+    if region_area == 0:
+        return 0.0
+    return float(np.logical_and(region, reference).sum() / region_area)
+
+
+def _mask_centroid(mask: np.ndarray) -> tuple[float, float] | None:
+    points = np.argwhere(np.asarray(mask, dtype=bool))
+    if points.size == 0:
+        return None
+    center = points.mean(axis=0)
+    return float(center[0]), float(center[1])
+
+
+def _centroid_shift(left_mask: np.ndarray, right_mask: np.ndarray) -> float | None:
+    left_center = _mask_centroid(left_mask)
+    right_center = _mask_centroid(right_mask)
+    if left_center is None or right_center is None:
+        return None
+    left_array = np.asarray(left_center, dtype=np.float32)
+    right_array = np.asarray(right_center, dtype=np.float32)
+    return float(np.linalg.norm(left_array - right_array))
+
+
 def build_cam_visualization(
     model: TorchSegmentationModelAdapter,
     clean_tensor: torch.Tensor,
@@ -227,10 +277,26 @@ def build_cam_visualization(
     adversarial_image: np.ndarray,
     feature_key: str,
     class_id: int,
+    ground_truth: np.ndarray | None = None,
+    clean_prediction: np.ndarray | None = None,
 ) -> CamVisualizationResult:
     clean_heatmap, clean_metadata = compute_feature_grad_cam(model, clean_tensor, feature_key, class_id)
     adversarial_heatmap, adversarial_metadata = compute_feature_grad_cam(model, adversarial_tensor, feature_key, class_id)
     diff_heatmap = normalize_heatmap(np.abs(adversarial_heatmap - clean_heatmap))
+
+    clean_top20_mask = _build_top_activation_mask(clean_heatmap, top_percent=20)
+    adversarial_top20_mask = _build_top_activation_mask(adversarial_heatmap, top_percent=20)
+
+    target_ground_truth_mask = (
+        np.asarray(ground_truth, dtype=np.int64) == int(class_id)
+        if ground_truth is not None
+        else np.zeros_like(clean_heatmap, dtype=bool)
+    )
+    target_clean_prediction_mask = (
+        np.asarray(clean_prediction, dtype=np.int64) == int(class_id)
+        if clean_prediction is not None
+        else np.zeros_like(clean_heatmap, dtype=bool)
+    )
 
     return CamVisualizationResult(
         feature_key=feature_key,
@@ -241,6 +307,13 @@ def build_cam_visualization(
         clean_mean=float(clean_heatmap.mean()),
         adversarial_mean=float(adversarial_heatmap.mean()),
         diff_mean=float(diff_heatmap.mean()),
-        clean_target_pixels=int(clean_metadata["target_pixels"]),
-        adversarial_target_pixels=int(adversarial_metadata["target_pixels"]),
+        clean_pred_pixels=int(clean_metadata["target_pixels"]),
+        adversarial_pred_pixels=int(adversarial_metadata["target_pixels"]),
+        clean_top20_area_ratio=float(clean_top20_mask.mean()) if clean_top20_mask.size else 0.0,
+        adversarial_top20_area_ratio=float(adversarial_top20_mask.mean()) if adversarial_top20_mask.size else 0.0,
+        clean_inside_gt_ratio=_mask_inside_ratio(clean_top20_mask, target_ground_truth_mask),
+        adversarial_inside_gt_ratio=_mask_inside_ratio(adversarial_top20_mask, target_ground_truth_mask),
+        clean_inside_clean_prediction_ratio=_mask_inside_ratio(clean_top20_mask, target_clean_prediction_mask),
+        adversarial_inside_clean_prediction_ratio=_mask_inside_ratio(adversarial_top20_mask, target_clean_prediction_mask),
+        centroid_shift=_centroid_shift(clean_top20_mask, adversarial_top20_mask),
     )

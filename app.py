@@ -680,6 +680,7 @@ def _render_cam_preview(label_config_path: str) -> None:
         format_func=lambda class_id: class_names.get(int(class_id), f"class_{class_id}"),
         key="cam_preview_class_id",
     )
+    selected_class_name = class_names.get(int(cam_class_id), f"class_{cam_class_id}")
 
     if len(cam_feature_keys) == 1:
         st.caption(f"CAM 自动输出当前唯一可用层: {cam_feature_keys[0]}")
@@ -708,6 +709,8 @@ def _render_cam_preview(label_config_path: str) -> None:
                         adversarial_image=preview_result.adversarial_image,
                         feature_key=feature_key,
                         class_id=int(cam_class_id),
+                        ground_truth=preview_result.ground_truth,
+                        clean_prediction=preview_result.clean_prediction,
                     )
                     for feature_key in cam_feature_keys
                 ]
@@ -722,24 +725,58 @@ def _render_cam_preview(label_config_path: str) -> None:
     if not cam_results:
         return
 
+    clean_pred_pixels = int((preview_result.clean_prediction == int(cam_class_id)).sum())
+    adversarial_pred_pixels = int((preview_result.adversarial_prediction == int(cam_class_id)).sum())
+    st.subheader("Global CAM Summary")
+    st.caption(f"Target class: {selected_class_name} ({int(cam_class_id)})")
+    global_columns = st.columns(2)
+    global_columns[0].metric("pred_pixels(clean)", clean_pred_pixels)
+    global_columns[1].metric("pred_pixels(adv)", adversarial_pred_pixels)
+
     layer_labels = ["浅层", "中层", "深层"]
     if len(cam_results) == 1:
         layer_labels = ["可用层"]
     elif len(cam_results) == 2:
         layer_labels = ["浅层", "深层"]
 
+    summary_rows: list[dict[str, object]] = []
+    for layer_label, cam_result in zip(layer_labels, cam_results, strict=True):
+        summary_rows.append(
+            {
+                "layer": layer_label,
+                "feature_key": cam_result.feature_key,
+                "cam_mean(clean)": round(cam_result.clean_mean, 4),
+                "cam_mean(adv)": round(cam_result.adversarial_mean, 4),
+                "cam_diff_mean": round(cam_result.diff_mean, 4),
+                "cam_area_top20%(clean)": round(cam_result.clean_top20_area_ratio * 100.0, 2),
+                "cam_area_top20%(adv)": round(cam_result.adversarial_top20_area_ratio * 100.0, 2),
+                "cam_inside_gt_ratio(clean)": round(cam_result.clean_inside_gt_ratio, 4),
+                "cam_inside_gt_ratio(adv)": round(cam_result.adversarial_inside_gt_ratio, 4),
+                "cam_inside_clean_pred_ratio(clean)": round(cam_result.clean_inside_clean_prediction_ratio, 4),
+                "cam_inside_clean_pred_ratio(adv)": round(cam_result.adversarial_inside_clean_prediction_ratio, 4),
+                "cam_centroid_shift_px": (
+                    round(cam_result.centroid_shift, 2) if cam_result.centroid_shift is not None else None
+                ),
+            }
+        )
+
+    st.subheader("Per-Layer CAM Metrics")
+    st.caption(
+        "cam_area_top20% 使用 CAM 热图前 20% 高响应区域；inside_*_ratio 表示该区域落在 GT 或 clean prediction 目标区域内的比例。"
+    )
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
+
     for layer_label, cam_result in zip(layer_labels, cam_results, strict=True):
         st.caption(f"{layer_label} CAM 层: {cam_result.feature_key}")
-        st.caption("pred_pixels 表示当前预测中属于 CAM 目标类别的像素数，不是 CAM 热图的高响应像素数。")
         cam_columns = st.columns(3)
         cam_columns[0].image(
             cam_result.clean_overlay,
-            caption=f"Clean CAM | mean={cam_result.clean_mean:.4f} pred_pixels={cam_result.clean_target_pixels}",
+            caption=f"Clean CAM | mean={cam_result.clean_mean:.4f}",
             use_container_width=True,
         )
         cam_columns[1].image(
             cam_result.adversarial_overlay,
-            caption=f"Adv CAM | mean={cam_result.adversarial_mean:.4f} pred_pixels={cam_result.adversarial_target_pixels}",
+            caption=f"Adv CAM | mean={cam_result.adversarial_mean:.4f}",
             use_container_width=True,
         )
         cam_columns[2].image(
