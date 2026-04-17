@@ -1,0 +1,10 @@
+name: cc_extra_sparse
+family: upernet_convnext
+threshold: 0.25
+stats_path: ../../models/defenses/cc_extra_sparse/UperNet_ConvNext_T_VOC_adv_cc_extra_sparse_train.pt
+strict_stats: true
+direction_mode: weight_sign
+lambda_mix: 0.5
+alpha0_mode: fixed
+beta: 0.15
+tau: 1.5

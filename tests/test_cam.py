@@ -39,6 +39,7 @@ class CamVisualizationTest(unittest.TestCase):
         self.assertGreaterEqual(float(heatmap.min()), 0.0)
         self.assertLessEqual(float(heatmap.max()), 1.0)
         self.assertIn("target_pixels", metadata)
+        self.assertIn("used_fallback", metadata)
 
     def test_compute_feature_grad_cam_supports_segmenter_encoder_blocks(self) -> None:
         segmenter = create_segmenter(
@@ -67,6 +68,7 @@ class CamVisualizationTest(unittest.TestCase):
         self.assertGreaterEqual(float(heatmap.min()), 0.0)
         self.assertLessEqual(float(heatmap.max()), 1.0)
         self.assertIn("target_pixels", metadata)
+        self.assertIn("used_fallback", metadata)
 
     def test_build_cam_visualization_returns_displayable_images(self) -> None:
         model = nn.Conv2d(1, 2, kernel_size=1, bias=True)
@@ -127,6 +129,7 @@ class CamVisualizationTest(unittest.TestCase):
         self.assertGreater(payload.clean_inside_clean_prediction_ratio, payload.adversarial_inside_clean_prediction_ratio)
         self.assertIsNotNone(payload.centroid_shift)
         self.assertGreater(float(payload.centroid_shift or 0.0), 0.0)
+        self.assertFalse(payload.clean_used_fallback)
 
     def test_discover_cam_supported_feature_keys_prefers_backbone_stage_keys_by_name(self) -> None:
         adapter = TorchSegmentationModelAdapter(nn.Conv2d(1, 2, kernel_size=1), num_classes=2, device="cpu")

@@ -23,6 +23,8 @@ from src.apps.adversarial_preview import (
     infer_model_family_from_checkpoint,
     ordered_feature_layer_names,
     FeaturePreviewResult,
+    run_feature_preview_sweep,
+    select_representative_layer_names,
 )
 from src.attacks import AttackConfig
 from src.models.backbones.convnext import ConvNeXt
@@ -137,6 +139,7 @@ class AdversarialPreviewVisualizationTest(unittest.TestCase):
         self.assertTrue((result.clean_image == result.adversarial_image).all())
         self.assertEqual(float(result.sample_delta_mean), 0.0)
         self.assertEqual(float(result.sample_delta_max), 0.0)
+        self.assertEqual(result.sample_delta_map.shape, (4, 4))
 
     def test_build_layer_visualization_returns_displayable_images_and_stats(self) -> None:
         result = FeaturePreviewResult(
@@ -150,6 +153,7 @@ class AdversarialPreviewVisualizationTest(unittest.TestCase):
             clean_image=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),
             adversarial_image=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),
             perturbation_image=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),
+            sample_delta_map=torch.zeros(8, 8, dtype=torch.float32).numpy(),
             sample_delta_heatmap=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),
             sample_delta_mean=0.0,
             sample_delta_max=0.0,
@@ -169,11 +173,15 @@ class AdversarialPreviewVisualizationTest(unittest.TestCase):
         self.assertEqual(payload["diff_image"].shape, (8, 8, 3))
         self.assertGreaterEqual(payload["mean_abs_diff"], 0.0)
         self.assertGreaterEqual(payload["max_abs_diff"], 0.0)
+        self.assertEqual(payload["clean_heatmap"].shape, (8, 8))
+        self.assertEqual(payload["diff_heatmap"].shape, (8, 8))
 
     def test_build_sample_delta_visualization_returns_heatmap_and_stats(self) -> None:
         clean_image = torch.zeros(8, 8, 3, dtype=torch.uint8).numpy()
         adversarial_image = torch.zeros(8, 8, 3, dtype=torch.uint8).numpy()
         adversarial_image[2:4, 2:4, :] = 32
+        sample_delta_map = torch.zeros(8, 8, dtype=torch.float32)
+        sample_delta_map[2:4, 2:4] = 0.125
         result = FeaturePreviewResult(
             sample_id="sample_0002",
             attack_name="fgsm",
@@ -185,6 +193,7 @@ class AdversarialPreviewVisualizationTest(unittest.TestCase):
             clean_image=clean_image,
             adversarial_image=adversarial_image,
             perturbation_image=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),
+            sample_delta_map=sample_delta_map.numpy(),
             sample_delta_heatmap=torch.zeros(8, 8, 3, dtype=torch.uint8).numpy(),
             sample_delta_mean=0.0,
             sample_delta_max=0.0,
@@ -202,6 +211,35 @@ class AdversarialPreviewVisualizationTest(unittest.TestCase):
         self.assertEqual(payload["delta_image"].shape, (8, 8, 3))
         self.assertGreater(payload["mean_abs_delta"], 0.0)
         self.assertGreater(payload["max_abs_delta"], 0.0)
+
+    def test_select_representative_layer_names_picks_shallow_mid_and_deep(self) -> None:
+        selected = select_representative_layer_names(
+            ["layer0", "layer1", "layer2", "layer3", "layer4"],
+            max_layers=3,
+        )
+
+        self.assertEqual(selected, ["layer0", "layer2", "layer4"])
+
+    def test_run_feature_preview_sweep_returns_sorted_unique_radii(self) -> None:
+        model = nn.Conv2d(1, 2, kernel_size=1, bias=True)
+        with torch.no_grad():
+            model.weight.copy_(torch.tensor([[[[3.0]]], [[[-3.0]]]]))
+            model.bias.copy_(torch.tensor([-0.5, 0.5]))
+        adapter = TorchSegmentationModelAdapter(model=model, num_classes=2, device="cpu")
+        image = torch.ones(1, 4, 4, dtype=torch.float32) * 0.75
+        target = torch.zeros(4, 4, dtype=torch.long)
+        attack_config = AttackConfig(name="fgsm", epsilon=2.0 / 255.0, step_size=2.0 / 255.0, steps=1)
+
+        results = run_feature_preview_sweep(
+            model=adapter,
+            attack_config=attack_config,
+            image=image,
+            target=target,
+            sample_id="sample_sweep",
+            radii_255=[4, 0, 4, 2],
+        )
+
+        self.assertEqual([int(round(result.epsilon * 255.0)) for result in results], [0, 2, 4])
 
 
 if __name__ == "__main__":

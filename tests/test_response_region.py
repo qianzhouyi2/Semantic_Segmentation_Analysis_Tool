@@ -40,6 +40,7 @@ class ResponseRegionVisualizationTest(unittest.TestCase):
         self.assertLessEqual(float(heatmap.max()), 1.0)
         self.assertIn("target_pixels", metadata)
         self.assertIn("score", metadata)
+        self.assertIn("used_fallback", metadata)
 
     def test_build_response_region_visualization_returns_displayable_images(self) -> None:
         adapter = self._build_test_adapter()
@@ -73,6 +74,7 @@ class ResponseRegionVisualizationTest(unittest.TestCase):
         self.assertLessEqual(payload.adversarial_active_ratio, 1.0)
         self.assertGreaterEqual(payload.overlap_iou, 0.0)
         self.assertLessEqual(payload.overlap_iou, 1.0)
+        self.assertIsInstance(payload.clean_used_fallback, bool)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.metrics.segmentation import compute_confusion_matrix, summarize_confusion_matrix
+from src.metrics.segmentation import compute_confusion_matrix, summarize_confusion_matrix, summarize_per_sample_confusion_matrix
 
 
 @torch.no_grad()
@@ -21,6 +21,7 @@ def evaluate_segmentation_model(
     max_batches: int = -1,
     logger: Any | None = None,
     log_interval: int = 20,
+    collect_per_sample: bool = False,
 ) -> dict[str, Any]:
     model.eval()
     model.to(device)
@@ -29,6 +30,7 @@ def evaluate_segmentation_model(
     processed_batches = 0
     processed_samples = 0
     filenames: list[str] = []
+    per_sample_metrics: list[dict[str, Any]] = []
 
     for batch_index, batch in enumerate(dataloader):
         if not isinstance(batch, (list, tuple)) or len(batch) < 2:
@@ -36,19 +38,41 @@ def evaluate_segmentation_model(
 
         images = batch[0].to(device, non_blocking=True)
         targets = batch[1].cpu().numpy()
+        batch_filenames: list[str] = []
         if len(batch) >= 3 and isinstance(batch[2], Iterable):
-            filenames.extend([str(item) for item in batch[2]])
+            batch_filenames = [str(item) for item in batch[2]]
+            filenames.extend(batch_filenames)
+        elif collect_per_sample:
+            batch_filenames = [f"sample_{processed_samples + offset:06d}" for offset in range(images.shape[0])]
 
         logits = model(images)
         predictions = logits.argmax(dim=1).cpu().numpy()
 
-        for target, prediction in zip(targets, predictions, strict=True):
-            confusion += compute_confusion_matrix(
+        for sample_offset, (target, prediction) in enumerate(zip(targets, predictions, strict=True)):
+            sample_confusion = compute_confusion_matrix(
                 target=target,
                 prediction=prediction,
                 num_classes=num_classes,
                 ignore_index=ignore_index,
             )
+            confusion += sample_confusion
+            if collect_per_sample:
+                sample_metrics = summarize_per_sample_confusion_matrix(sample_confusion)
+                filename = (
+                    batch_filenames[sample_offset]
+                    if sample_offset < len(batch_filenames)
+                    else f"sample_{processed_samples + sample_offset:06d}"
+                )
+                per_sample_metrics.append(
+                    {
+                        "sample_index": processed_samples + sample_offset,
+                        "filename": filename,
+                        "pixel_accuracy": sample_metrics.pixel_accuracy,
+                        "sample_miou": sample_metrics.sample_miou,
+                        "sample_dice": sample_metrics.sample_dice,
+                        "valid_class_count": sample_metrics.valid_class_count,
+                    }
+                )
 
         processed_batches += 1
         processed_samples += images.shape[0]
@@ -74,4 +98,6 @@ def evaluate_segmentation_model(
             "mIoU": float(metrics.mean_iou * 100.0),
         },
     }
+    if collect_per_sample:
+        payload["per_sample_metrics"] = per_sample_metrics
     return payload

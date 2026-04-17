@@ -12,14 +12,17 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 CORE_SCRIPT_MODULES = (
+    "scripts.compare_per_sample_robustness",
     "scripts.evaluate_voc_clean",
     "scripts.launch_voc_attack_suite",
+    "scripts.launch_voc_all_attacks",
     "scripts.launch_voc_transfer_protocol",
     "scripts.run_attack",
     "scripts.run_transfer_attack",
     "scripts.run_transfer_group_attack",
     "scripts.search_sparse_thresholds",
     "scripts.prepare_sparse_defense",
+    "scripts.summarize_voc_all_attacks",
 )
 
 

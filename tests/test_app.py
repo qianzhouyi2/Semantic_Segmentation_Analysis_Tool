@@ -6,7 +6,10 @@ import types
 import unittest
 from importlib.machinery import ModuleSpec
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import numpy as np
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +66,32 @@ class AppConfigResolutionTest(unittest.TestCase):
                 resolved = app._resolve_pascal_voc_label_config_path(str(default_label_path))
 
         self.assertEqual(resolved, str(default_label_path))
+
+    def test_parse_sweep_radii_returns_sorted_unique_values(self) -> None:
+        self.assertEqual(app._parse_sweep_radii("4, 0, 2, 4"), [0, 2, 4])
+
+    def test_parse_sweep_radii_rejects_out_of_range_value(self) -> None:
+        with self.assertRaises(ValueError):
+            app._parse_sweep_radii("1, 512")
+
+    def test_discover_target_class_ids_defaults_to_present_classes(self) -> None:
+        preview_result = SimpleNamespace(
+            ground_truth=np.asarray([[0, 1], [1, 2]], dtype=np.int64),
+            clean_prediction=np.asarray([[0, 1], [1, 1]], dtype=np.int64),
+            adversarial_prediction=np.asarray([[0, 2], [2, 2]], dtype=np.int64),
+        )
+
+        with patch.object(app, "_optional_label_config", return_value=None):
+            class_ids, class_names, background_ids, present_class_ids = app._discover_target_class_ids(
+                preview_result,
+                "configs/labels/example.yaml",
+                show_all_classes=False,
+            )
+
+        self.assertEqual(class_ids, [0, 1, 2])
+        self.assertEqual(class_names, {})
+        self.assertEqual(background_ids, (0,))
+        self.assertEqual(present_class_ids, [0, 1, 2])
 
 
 if __name__ == "__main__":

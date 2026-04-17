@@ -8,11 +8,13 @@
 - 数据集扫描与体检：检查图像和 mask 配对、缺失文件、尺寸不一致、空 mask、非法标签，并统计类别分布。
 - Streamlit 可视化：提供 `Dataset Scan`、`Triplet Preview`、`Adversarial Feature Preview`、`CAM Preview`、`Response Region Analysis` 五个模块。
 - 分割结果评估：对预测 mask 与 GT mask 计算 `pixel_accuracy`、`mIoU`、`Dice`、`Precision`、`Recall`、`F1`。
+- per-sample 指标导出：clean / adversarial 评测可选导出 `per_sample_metrics.csv` / `per_sample_metrics.jsonl`。
 - Pascal VOC clean 评测：加载本地 checkpoint，在 VOC2012 val 上输出标准分割指标和逐类结果。
 - 对抗攻击评测：支持多种分割攻击配置，并导出攻击后指标、逐类结果和扰动统计。
 - 黑盒迁移攻击：显式区分 `source -> target`，评估迁移型扰动在目标模型上的退化效果。
 - 稀疏防御分析：支持 sidecar 校准、阈值搜索、clean / PGD 联合筛选，以及防御配置加载。
 - 批量实验自动化：提供 attack suite、transfer protocol、all-attacks 套件的 manifest、Slurm 提交和汇总脚本。
+- journal-style 鲁棒性汇总：all-attacks 汇总同时给出 attack mean 和 image-wise worst-case，并支持 paired bootstrap 统计。
 - 结果导出：统一生成 `summary.json`、`per_class_metrics.csv`、`report.md`、`summary_all.csv` 等输出。
 
 ## 已支持的模型、攻击与防御
@@ -203,12 +205,36 @@ python scripts/evaluate_voc_clean.py \
 --defense-config configs/defenses/meansparse_example.yaml
 ```
 
+如果后续要做 image-wise worst-case 或 paired robustness 统计，建议直接开启 per-sample 导出：
+
+```bash
+python scripts/evaluate_voc_clean.py \
+  --family upernet_convnext \
+  --checkpoint models/UperNet_ConvNext_T_VOC_clean.pth \
+  --dataset-root datasets \
+  --output-dir results/reports/voc_clean_eval/UperNet_ConvNext_T_VOC_clean \
+  --save-per-sample
+```
+
 输出目录包含：
 
 - `summary.json`
 - `per_class_metrics.csv`
+- `per_sample_metrics.csv`
+- `per_sample_metrics.jsonl`
 - `report.md`
 - `evaluate.log`
+
+`per_sample_metrics.csv` 的稳定 schema 为：
+
+- `sample_index`
+- `filename`
+- `pixel_accuracy`
+- `sample_miou`
+- `sample_dice`
+- `valid_class_count`
+
+其中 `sample_miou` 定义为：对单张图像先算 confusion matrix，再对 union 非空的类别取 IoU 均值。
 
 ### 5. 运行白盒对抗攻击评测
 
@@ -232,6 +258,7 @@ results/reports/voc_adv_eval/<checkpoint_stem>_<attack_name>/
 - `mean_linf`
 - `max_linf`
 - `mean_l2`
+- 可选的 `per_sample_metrics.csv` / `per_sample_metrics.jsonl`
 
 自适应白盒 sparse defense 评测现在也支持：
 
@@ -250,7 +277,8 @@ python scripts/run_attack.py \
   --checkpoint models/UperNet_ConvNext_T_VOC_clean.pth \
   --defense-config configs/defenses/meansparse_example.yaml \
   --epsilon-radius-255 4 \
-  --dataset-root datasets
+  --dataset-root datasets \
+  --save-per-sample
 ```
 
 如果要直接扫 `2/255, 4/255, 8/255`：
@@ -283,6 +311,22 @@ python scripts/evaluate_robustness.py \
   --adv-summary results/reports/voc_adv_eval/UperNet_ConvNext_T_VOC_clean_fgsm/summary.json \
   --output-dir results/reports/robustness/UperNet_ConvNext_T_fgsm
 ```
+
+如果要做 baseline vs candidate 的 paired robustness 统计，可直接比较两份 per-sample CSV：
+
+```bash
+python scripts/compare_per_sample_robustness.py \
+  --baseline results/reports/voc_adv_eval/UperNet_ConvNext_T_VOC_clean_pgd/per_sample_metrics.csv \
+  --candidate results/reports/voc_adv_eval/UperNet_ConvNext_T_VOC_clean_pgd_meansparse/per_sample_metrics.csv \
+  --output-dir results/reports/per_sample_robustness/convnext_pgd_meansparse
+```
+
+输出包括：
+
+- `paired_robustness_stats.json`
+- `paired_robustness_stats.csv`
+- `paired_robustness_stats.md`
+- `paired_sample_deltas.csv`
 
 ### 7. 稀疏防御校准与阈值搜索
 
@@ -377,6 +421,39 @@ python scripts/evaluate_all_voc_clean_models.py \
 - attack suite：`materialize_voc_attack_suite_manifest.py` -> `launch_voc_attack_suite.py` -> `summarize_voc_attack_suite.py`
 - strict transfer protocol：`materialize_voc_transfer_protocol_manifest.py` -> `launch_voc_transfer_protocol.py` -> `summarize_voc_transfer_protocol.py`
 - full all-attacks suite：`launch_voc_all_attacks.py` -> `summarize_voc_all_attacks.py`
+
+如果要让 full all-attacks suite 直接产出 journal-style worst-case 汇总，建议在 launch 阶段就打开 per-sample 导出：
+
+```bash
+python scripts/launch_voc_all_attacks.py \
+  --manifest results/reports/voc_attack_suite_manifest/attack_suite_manifest.json \
+  --suite-root results/reports/voc_all_attacks \
+  --dataset-root datasets \
+  --save-per-sample \
+  --per-sample-policy require
+```
+
+也可以手动重跑汇总：
+
+```bash
+python scripts/summarize_voc_all_attacks.py \
+  --manifest results/reports/voc_attack_suite_manifest/attack_suite_manifest.json \
+  --suite-root results/reports/voc_all_attacks \
+  --per-sample-policy require
+```
+
+新的 all-attacks 汇总会同时保留旧输出，并新增：
+
+- `all_attacks_worstcase_summary.json`
+- `all_attacks_worstcase_summary.csv`
+- `all_attacks_worstcase_summary.md`
+
+关键字段说明：
+
+- `mean_attack_miou`：各攻击 aggregate mIoU 的平均值
+- `worst_imagewise_attack_miou`：逐图在所有攻击里取最差 `sample_miou` 后再平均
+- `worst_attack_stem_by_frequency`：最常成为逐图最差攻击的 attack stem
+- `num_attacks_counted`：实际纳入统计的攻击数
 
 attack suite 和 strict transfer protocol 现在也支持把 adaptive white-box protocol 往下传到批量任务，例如：
 
@@ -537,6 +614,7 @@ python -m unittest discover -s tests
 
 - `GUIDE.md`：完整工作流说明，覆盖 clean / adv / sparse / transfer / suite 的推荐用法。
 - `README_FRONTEND.md`：前端页面、交互和展示重点。
+- `docs/phase5_worstcase_per_sample_statistics.md`：Phase 5 的 per-sample、worst-case 和 paired statistics 协议说明。
 - `src/attacks/README.md`：各攻击方法的原理与实现约定。
 - `configs/defenses/README.md`：稀疏防御 YAML 的字段说明与推荐流程。
 - `models/README.md`：本地权重和 sidecar 的存放约定。

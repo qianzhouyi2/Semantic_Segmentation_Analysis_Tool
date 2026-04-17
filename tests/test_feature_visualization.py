@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.models.backbones.vit import VisionTransformer
-from src.robustness.visualization import save_layerwise_feature_visualizations
+from src.robustness.visualization import resolve_heatmap_display_bounds, save_layerwise_feature_visualizations
 
 
 class VisionTransformerIntermediateFeatureTest(unittest.TestCase):
@@ -76,6 +76,18 @@ class FeatureVisualizationExportTest(unittest.TestCase):
             json_payload = json.loads((sample_dir / "feature_maps.json").read_text(encoding="utf-8"))
             self.assertEqual(json_payload["sample_key"], "sample/a")
             self.assertEqual(len(json_payload["layers"]), 1)
+
+    def test_resolve_heatmap_display_bounds_supports_shared_and_fixed_modes(self) -> None:
+        heatmaps = [
+            torch.tensor([[0.0, 1.0], [2.0, 3.0]], dtype=torch.float32).numpy(),
+            torch.tensor([[4.0, 5.0], [6.0, 7.0]], dtype=torch.float32).numpy(),
+        ]
+
+        shared_bounds = resolve_heatmap_display_bounds(heatmaps, scale_mode="shared", percentile_clip_upper=100.0)
+        fixed_bounds = resolve_heatmap_display_bounds(heatmaps, scale_mode="fixed", fixed_range=(0.0, 1.0))
+
+        self.assertEqual(shared_bounds, [(0.0, 7.0), (0.0, 7.0)])
+        self.assertEqual(fixed_bounds, [(0.0, 1.0), (0.0, 1.0)])
 
 
 if __name__ == "__main__":

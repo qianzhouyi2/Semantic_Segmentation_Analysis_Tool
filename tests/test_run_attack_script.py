@@ -36,6 +36,7 @@ def _build_args(**overrides) -> argparse.Namespace:
         "feature_vis_samples": 0,
         "feature_vis_layers": -1,
         "feature_vis_dir": "",
+        "save_per_sample": False,
         "strict": True,
     }
     payload.update(overrides)

@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 from src.models import TorchSegmentationModelAdapter
 from src.models.architectures.segmenter import SegMenter, pad_to_patch_size, remove_padding
-from src.robustness.visualization import normalize_heatmap, overlay_heatmap_on_image
+from src.robustness.visualization import normalize_heatmap, overlay_heatmap_on_image, resolve_heatmap_display_bounds
 
 
 @dataclass(slots=True)
@@ -31,6 +31,8 @@ class CamVisualizationResult:
     clean_inside_clean_prediction_ratio: float
     adversarial_inside_clean_prediction_ratio: float
     centroid_shift: float | None
+    clean_used_fallback: bool
+    adversarial_used_fallback: bool
 
 
 def discover_cam_supported_feature_keys(
@@ -141,6 +143,7 @@ def compute_feature_grad_cam(
         "class_id": int(class_id),
         "target_pixels": target_pixels,
         "score": float(target_score.detach().cpu().item()),
+        "used_fallback": target_pixels == 0,
     }
 
 
@@ -216,6 +219,7 @@ def _compute_segmenter_grad_cam(
         "class_id": int(class_id),
         "target_pixels": target_pixels,
         "score": float(target_score.detach().cpu().item()),
+        "used_fallback": target_pixels == 0,
     }
 
 
@@ -279,10 +283,17 @@ def build_cam_visualization(
     class_id: int,
     ground_truth: np.ndarray | None = None,
     clean_prediction: np.ndarray | None = None,
+    heatmap_scale_mode: str = "independent",
+    heatmap_percentile_clip_upper: float = 100.0,
 ) -> CamVisualizationResult:
     clean_heatmap, clean_metadata = compute_feature_grad_cam(model, clean_tensor, feature_key, class_id)
     adversarial_heatmap, adversarial_metadata = compute_feature_grad_cam(model, adversarial_tensor, feature_key, class_id)
     diff_heatmap = normalize_heatmap(np.abs(adversarial_heatmap - clean_heatmap))
+    display_bounds = resolve_heatmap_display_bounds(
+        [clean_heatmap, adversarial_heatmap, diff_heatmap],
+        scale_mode=heatmap_scale_mode,
+        percentile_clip_upper=heatmap_percentile_clip_upper,
+    )
 
     clean_top20_mask = _build_top_activation_mask(clean_heatmap, top_percent=20)
     adversarial_top20_mask = _build_top_activation_mask(adversarial_heatmap, top_percent=20)
@@ -301,9 +312,30 @@ def build_cam_visualization(
     return CamVisualizationResult(
         feature_key=feature_key,
         class_id=int(class_id),
-        clean_overlay=overlay_heatmap_on_image(clean_image, clean_heatmap, alpha=0.45, cmap_name="jet"),
-        adversarial_overlay=overlay_heatmap_on_image(adversarial_image, adversarial_heatmap, alpha=0.45, cmap_name="jet"),
-        diff_image=overlay_heatmap_on_image(adversarial_image, diff_heatmap, alpha=0.50, cmap_name="inferno"),
+        clean_overlay=overlay_heatmap_on_image(
+            clean_image,
+            clean_heatmap,
+            alpha=0.45,
+            cmap_name="jet",
+            vmin=display_bounds[0][0],
+            vmax=display_bounds[0][1],
+        ),
+        adversarial_overlay=overlay_heatmap_on_image(
+            adversarial_image,
+            adversarial_heatmap,
+            alpha=0.45,
+            cmap_name="jet",
+            vmin=display_bounds[1][0],
+            vmax=display_bounds[1][1],
+        ),
+        diff_image=overlay_heatmap_on_image(
+            adversarial_image,
+            diff_heatmap,
+            alpha=0.50,
+            cmap_name="inferno",
+            vmin=display_bounds[2][0],
+            vmax=display_bounds[2][1],
+        ),
         clean_mean=float(clean_heatmap.mean()),
         adversarial_mean=float(adversarial_heatmap.mean()),
         diff_mean=float(diff_heatmap.mean()),
@@ -316,4 +348,6 @@ def build_cam_visualization(
         clean_inside_clean_prediction_ratio=_mask_inside_ratio(clean_top20_mask, target_clean_prediction_mask),
         adversarial_inside_clean_prediction_ratio=_mask_inside_ratio(adversarial_top20_mask, target_clean_prediction_mask),
         centroid_shift=_centroid_shift(clean_top20_mask, adversarial_top20_mask),
+        clean_used_fallback=bool(clean_metadata["used_fallback"]),
+        adversarial_used_fallback=bool(adversarial_metadata["used_fallback"]),
     )

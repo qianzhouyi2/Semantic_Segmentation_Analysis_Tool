@@ -12,7 +12,7 @@ from src.common import setup_logger
 from src.datasets import PASCAL_VOC_CLASS_NAMES, PascalVOCValidationDataset
 from src.evaluation import evaluate_segmentation_model
 from src.models import MODEL_FAMILY_CHOICES, build_model_from_checkpoint
-from src.reporting.exporter import write_csv, write_json, write_markdown
+from src.reporting.exporter import write_csv, write_json, write_jsonl, write_markdown
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,6 +28,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda", help="Torch device, e.g. cuda or cuda:0.")
     parser.add_argument("--num-classes", type=int, default=21, help="Segmentation class count.")
     parser.add_argument("--max-batches", type=int, default=-1, help="Optional early-stop for debugging.")
+    parser.add_argument(
+        "--save-per-sample",
+        action="store_true",
+        help="Export per-sample metrics as CSV and JSONL for downstream worst-case and paired analyses.",
+    )
     parser.add_argument("--strict", action="store_true", default=True, help="Require exact checkpoint key match.")
     return parser.parse_args()
 
@@ -83,7 +88,14 @@ def main() -> None:
         class_names=PASCAL_VOC_CLASS_NAMES,
         max_batches=args.max_batches,
         logger=logger,
+        collect_per_sample=args.save_per_sample,
     )
+    per_sample_metrics = summary.pop("per_sample_metrics", [])
+    per_sample_csv_path = None
+    per_sample_jsonl_path = None
+    if args.save_per_sample:
+        per_sample_csv_path = write_csv(output_dir / "per_sample_metrics.csv", per_sample_metrics)
+        per_sample_jsonl_path = write_jsonl(output_dir / "per_sample_metrics.jsonl", per_sample_metrics)
 
     payload = {
         "model": {
@@ -100,6 +112,22 @@ def main() -> None:
             "resize_short": 473,
             "crop_size": 473,
             "num_samples": len(dataset),
+        },
+        "artifacts": {
+            "per_sample_metrics_csv": None if per_sample_csv_path is None else str(per_sample_csv_path.resolve()),
+            "per_sample_metrics_jsonl": None if per_sample_jsonl_path is None else str(per_sample_jsonl_path.resolve()),
+            "per_sample_metrics_schema": (
+                None
+                if not args.save_per_sample
+                else [
+                    "sample_index",
+                    "filename",
+                    "pixel_accuracy",
+                    "sample_miou",
+                    "sample_dice",
+                    "valid_class_count",
+                ]
+            ),
         },
         **summary,
     }
@@ -121,6 +149,12 @@ def main() -> None:
             f"- dataset_split: {args.dataset_split}",
             f"- processed_samples: {payload['processed_samples']}",
             f"- processed_batches: {payload['processed_batches']}",
+            f"- save_per_sample: {args.save_per_sample}",
+            (
+                f"- per_sample_metrics_csv: {per_sample_csv_path.resolve()}"
+                if per_sample_csv_path is not None
+                else "- per_sample_metrics_csv: <disabled>"
+            ),
             "",
             "## Reference Metrics",
             f"- mIoU: {payload['reference_percent']['mIoU']:.2f}",

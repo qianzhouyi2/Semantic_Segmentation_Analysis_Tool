@@ -13,6 +13,7 @@ from src.models import TorchSegmentationModelAdapter, load_sparse_defense_config
 from src.robustness.visualization import (
     colorize_heatmap,
     normalize_perturbation,
+    resolve_heatmap_display_bounds,
     summarize_image_delta,
     summarize_feature_map,
     tensor_to_rgb_image,
@@ -65,6 +66,7 @@ class FeaturePreviewResult:
     clean_image: np.ndarray
     adversarial_image: np.ndarray
     perturbation_image: np.ndarray
+    sample_delta_map: np.ndarray
     sample_delta_heatmap: np.ndarray
     sample_delta_mean: float
     sample_delta_max: float
@@ -199,12 +201,42 @@ def _perturbation_to_image(perturbation: torch.Tensor) -> np.ndarray:
     return normalize_perturbation(data.permute(1, 2, 0).numpy())
 
 
-def build_sample_delta_visualization(result: FeaturePreviewResult) -> dict[str, Any]:
-    delta_heatmap = summarize_image_delta(result.clean_image, result.adversarial_image)
+def heatmap_display_note(scale_mode: str, percentile_clip_upper: float) -> str:
+    clipped_percentile = float(np.clip(percentile_clip_upper, 0.0, 100.0))
+    if scale_mode == "fixed":
+        note = "fixed-scale normalized heatmap [0,1]"
+    elif scale_mode == "shared":
+        note = "shared-scale normalized heatmap"
+    else:
+        note = "independent normalized heatmap"
+    if clipped_percentile < 100.0:
+        return f"{note}, clip<=P{clipped_percentile:.0f}"
+    return note
+
+
+def build_sample_delta_visualization(
+    result: FeaturePreviewResult,
+    *,
+    scale_mode: str = "independent",
+    percentile_clip_upper: float = 100.0,
+) -> dict[str, Any]:
+    delta_heatmap = result.sample_delta_map
+    display_bounds = resolve_heatmap_display_bounds(
+        [delta_heatmap],
+        scale_mode=scale_mode,
+        percentile_clip_upper=percentile_clip_upper,
+    )[0]
     return {
-        "delta_image": colorize_heatmap(delta_heatmap, cmap_name="inferno"),
+        "delta_image": colorize_heatmap(
+            delta_heatmap,
+            cmap_name="inferno",
+            vmin=display_bounds[0],
+            vmax=display_bounds[1],
+        ),
         "mean_abs_delta": float(delta_heatmap.mean()),
         "max_abs_delta": float(delta_heatmap.max()),
+        "display_note": heatmap_display_note(scale_mode, percentile_clip_upper),
+        "display_range": display_bounds,
     }
 
 
@@ -260,6 +292,7 @@ def generate_feature_preview(
         clean_image=tensor_to_rgb_image(images),
         adversarial_image=tensor_to_rgb_image(attack_output.adversarial_images),
         perturbation_image=_perturbation_to_image(attack_output.perturbation),
+        sample_delta_map=sample_delta,
         sample_delta_heatmap=colorize_heatmap(sample_delta, cmap_name="inferno"),
         sample_delta_mean=float(sample_delta.mean()),
         sample_delta_max=float(sample_delta.max()),
@@ -273,10 +306,10 @@ def generate_feature_preview(
     )
 
 
-def build_layer_visualization(
+def compute_layer_heatmaps(
     result: FeaturePreviewResult,
     layer_name: str,
-) -> dict[str, Any]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     clean_heatmap = summarize_feature_map(
         result.clean_features[layer_name],
         target_size=result.clean_image.shape[:2],
@@ -286,14 +319,92 @@ def build_layer_visualization(
         target_size=result.clean_image.shape[:2],
     )
     diff_heatmap = np.abs(adversarial_heatmap - clean_heatmap)
+    return clean_heatmap, adversarial_heatmap, diff_heatmap
+
+
+def build_layer_visualization(
+    result: FeaturePreviewResult,
+    layer_name: str,
+    *,
+    scale_mode: str = "independent",
+    percentile_clip_upper: float = 100.0,
+) -> dict[str, Any]:
+    clean_heatmap, adversarial_heatmap, diff_heatmap = compute_layer_heatmaps(result, layer_name)
+    display_bounds = resolve_heatmap_display_bounds(
+        [clean_heatmap, adversarial_heatmap, diff_heatmap],
+        scale_mode=scale_mode,
+        percentile_clip_upper=percentile_clip_upper,
+    )
 
     return {
         "layer_name": layer_name,
-        "clean_image": colorize_heatmap(clean_heatmap),
-        "adversarial_image": colorize_heatmap(adversarial_heatmap),
-        "diff_image": colorize_heatmap(diff_heatmap),
+        "clean_heatmap": clean_heatmap,
+        "adversarial_heatmap": adversarial_heatmap,
+        "diff_heatmap": diff_heatmap,
+        "clean_image": colorize_heatmap(
+            clean_heatmap,
+            vmin=display_bounds[0][0],
+            vmax=display_bounds[0][1],
+        ),
+        "adversarial_image": colorize_heatmap(
+            adversarial_heatmap,
+            vmin=display_bounds[1][0],
+            vmax=display_bounds[1][1],
+        ),
+        "diff_image": colorize_heatmap(
+            diff_heatmap,
+            vmin=display_bounds[2][0],
+            vmax=display_bounds[2][1],
+        ),
         "clean_shape": tuple(result.clean_features[layer_name].shape),
         "adversarial_shape": tuple(result.adversarial_features[layer_name].shape),
         "mean_abs_diff": float(diff_heatmap.mean()),
         "max_abs_diff": float(diff_heatmap.max()),
+        "display_note": heatmap_display_note(scale_mode, percentile_clip_upper),
+        "display_ranges": display_bounds,
     }
+
+
+def select_representative_layer_names(layer_names: list[str], max_layers: int = 3) -> list[str]:
+    if max_layers <= 0 or not layer_names:
+        return []
+    if len(layer_names) <= max_layers:
+        return list(layer_names)
+
+    selected: list[str] = []
+    target_count = min(max_layers, len(layer_names))
+    for index in range(target_count):
+        position = round(index * (len(layer_names) - 1) / (target_count - 1))
+        layer_name = layer_names[position]
+        if layer_name not in selected:
+            selected.append(layer_name)
+
+    if len(selected) < target_count:
+        for layer_name in layer_names:
+            if layer_name in selected:
+                continue
+            selected.append(layer_name)
+            if len(selected) == target_count:
+                break
+    return selected
+
+
+def run_feature_preview_sweep(
+    model: TorchSegmentationModelAdapter,
+    attack_config: AttackConfig,
+    image: torch.Tensor,
+    target: torch.Tensor,
+    sample_id: str,
+    radii_255: list[int],
+) -> list[FeaturePreviewResult]:
+    unique_radii = sorted({int(radius) for radius in radii_255 if 0 <= int(radius) <= 255})
+    return [
+        generate_feature_preview(
+            model=model,
+            attack_config=attack_config.with_radius_255(radius_255),
+            image=image,
+            target=target,
+            sample_id=sample_id,
+        )
+        for radius_255 in unique_radii
+    ]

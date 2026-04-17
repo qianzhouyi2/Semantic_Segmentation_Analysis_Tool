@@ -11,6 +11,7 @@ from src.robustness.visualization import (
     normalize_heatmap,
     overlay_binary_mask_on_image,
     overlay_heatmap_on_image,
+    resolve_heatmap_display_bounds,
 )
 
 
@@ -42,6 +43,8 @@ class ResponseRegionVisualizationResult:
     adversarial_target_pixels: int
     clean_score: float
     adversarial_score: float
+    clean_used_fallback: bool
+    adversarial_used_fallback: bool
 
 
 def _target_score_from_class_logits(logits: torch.Tensor, class_id: int) -> tuple[torch.Tensor, int]:
@@ -76,6 +79,7 @@ def compute_input_response_heatmap(
         "score": float(target_score.detach().cpu().item()),
         "mean_response": float(response_map.mean()),
         "peak_response": float(response_map.max()) if response_map.size else 0.0,
+        "used_fallback": target_pixels == 0,
     }
 
 
@@ -110,10 +114,17 @@ def build_response_region_visualization(
     adversarial_image: np.ndarray,
     class_id: int,
     threshold_percentile: int = 85,
+    heatmap_scale_mode: str = "independent",
+    heatmap_percentile_clip_upper: float = 100.0,
 ) -> ResponseRegionVisualizationResult:
     clean_heatmap, clean_metadata = compute_input_response_heatmap(model, clean_tensor, class_id)
     adversarial_heatmap, adversarial_metadata = compute_input_response_heatmap(model, adversarial_tensor, class_id)
     diff_heatmap = normalize_heatmap(np.abs(adversarial_heatmap - clean_heatmap))
+    display_bounds = resolve_heatmap_display_bounds(
+        [clean_heatmap, adversarial_heatmap, diff_heatmap],
+        scale_mode=heatmap_scale_mode,
+        percentile_clip_upper=heatmap_percentile_clip_upper,
+    )
 
     clean_region_mask = _build_response_region_mask(clean_heatmap, threshold_percentile)
     adversarial_region_mask = _build_response_region_mask(adversarial_heatmap, threshold_percentile)
@@ -128,14 +139,30 @@ def build_response_region_visualization(
         clean_region_mask=clean_region_mask,
         adversarial_region_mask=adversarial_region_mask,
         overlap_region_mask=overlap_region_mask,
-        clean_overlay=overlay_heatmap_on_image(clean_image, clean_heatmap, alpha=0.45, cmap_name="jet"),
+        clean_overlay=overlay_heatmap_on_image(
+            clean_image,
+            clean_heatmap,
+            alpha=0.45,
+            cmap_name="jet",
+            vmin=display_bounds[0][0],
+            vmax=display_bounds[0][1],
+        ),
         adversarial_overlay=overlay_heatmap_on_image(
             adversarial_image,
             adversarial_heatmap,
             alpha=0.45,
             cmap_name="jet",
+            vmin=display_bounds[1][0],
+            vmax=display_bounds[1][1],
         ),
-        diff_overlay=overlay_heatmap_on_image(adversarial_image, diff_heatmap, alpha=0.50, cmap_name="inferno"),
+        diff_overlay=overlay_heatmap_on_image(
+            adversarial_image,
+            diff_heatmap,
+            alpha=0.50,
+            cmap_name="inferno",
+            vmin=display_bounds[2][0],
+            vmax=display_bounds[2][1],
+        ),
         clean_region_overlay=overlay_binary_mask_on_image(clean_image, clean_region_mask, color=(255, 128, 0), alpha=0.55),
         adversarial_region_overlay=overlay_binary_mask_on_image(
             adversarial_image,
@@ -156,4 +183,6 @@ def build_response_region_visualization(
         adversarial_target_pixels=int(adversarial_metadata["target_pixels"]),
         clean_score=float(clean_metadata["score"]),
         adversarial_score=float(adversarial_metadata["score"]),
+        clean_used_fallback=bool(clean_metadata["used_fallback"]),
+        adversarial_used_fallback=bool(adversarial_metadata["used_fallback"]),
     )

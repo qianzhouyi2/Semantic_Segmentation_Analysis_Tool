@@ -32,6 +32,22 @@ def compute_confusion_matrix(
     return histogram.reshape(num_classes, num_classes)
 
 
+def _compute_class_statistics(
+    confusion_matrix: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    true_positive = np.diag(confusion_matrix).astype(np.float64)
+    gt_pixels = confusion_matrix.sum(axis=1).astype(np.float64)
+    pred_pixels = confusion_matrix.sum(axis=0).astype(np.float64)
+    union = gt_pixels + pred_pixels - true_positive
+
+    precision = _safe_divide(true_positive, pred_pixels)
+    recall = _safe_divide(true_positive, gt_pixels)
+    iou = _safe_divide(true_positive, union)
+    dice = _safe_divide(2.0 * true_positive, gt_pixels + pred_pixels)
+    f1 = _safe_divide(2.0 * precision * recall, precision + recall)
+    return true_positive, gt_pixels, pred_pixels, union, precision, recall, iou, dice, f1
+
+
 @dataclass(slots=True)
 class SegmentationMetrics:
     confusion_matrix: np.ndarray
@@ -56,20 +72,77 @@ class SegmentationMetrics:
         }
 
 
+@dataclass(slots=True)
+class PerSampleSegmentationMetrics:
+    confusion_matrix: np.ndarray
+    pixel_accuracy: float
+    sample_miou: float
+    sample_dice: float
+    valid_class_count: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "pixel_accuracy": self.pixel_accuracy,
+            "sample_miou": self.sample_miou,
+            "sample_dice": self.sample_dice,
+            "valid_class_count": self.valid_class_count,
+            "confusion_matrix": self.confusion_matrix.tolist(),
+        }
+
+
+def summarize_per_sample_confusion_matrix(confusion_matrix: np.ndarray) -> PerSampleSegmentationMetrics:
+    """Summarize a single-image confusion matrix.
+
+    The image-wise mIoU is defined as the mean IoU over classes whose union is
+    non-empty within this sample. Classes with zero union are excluded so empty
+    classes do not dilute the per-image score.
+    """
+
+    (
+        true_positive,
+        _gt_pixels,
+        _pred_pixels,
+        union,
+        _precision,
+        _recall,
+        iou,
+        dice,
+        _f1,
+    ) = _compute_class_statistics(confusion_matrix)
+    valid_classes = union > 0
+    total_pixels = float(confusion_matrix.sum())
+    return PerSampleSegmentationMetrics(
+        confusion_matrix=confusion_matrix,
+        pixel_accuracy=float(true_positive.sum() / total_pixels) if total_pixels else 0.0,
+        sample_miou=float(np.nanmean(iou[valid_classes])) if np.any(valid_classes) else 0.0,
+        sample_dice=float(np.nanmean(dice[valid_classes])) if np.any(valid_classes) else 0.0,
+        valid_class_count=int(valid_classes.sum()),
+    )
+
+
+def compute_per_sample_segmentation_metrics(
+    target: np.ndarray,
+    prediction: np.ndarray,
+    num_classes: int,
+    ignore_index: int | None = None,
+) -> PerSampleSegmentationMetrics:
+    confusion_matrix = compute_confusion_matrix(
+        target=target,
+        prediction=prediction,
+        num_classes=num_classes,
+        ignore_index=ignore_index,
+    )
+    return summarize_per_sample_confusion_matrix(confusion_matrix)
+
+
 def summarize_confusion_matrix(
     confusion_matrix: np.ndarray,
     class_names: dict[int, str] | None = None,
 ) -> SegmentationMetrics:
     class_names = class_names or {}
-    true_positive = np.diag(confusion_matrix).astype(np.float64)
-    gt_pixels = confusion_matrix.sum(axis=1).astype(np.float64)
-    pred_pixels = confusion_matrix.sum(axis=0).astype(np.float64)
-
-    precision = _safe_divide(true_positive, pred_pixels)
-    recall = _safe_divide(true_positive, gt_pixels)
-    iou = _safe_divide(true_positive, gt_pixels + pred_pixels - true_positive)
-    dice = _safe_divide(2.0 * true_positive, gt_pixels + pred_pixels)
-    f1 = _safe_divide(2.0 * precision * recall, precision + recall)
+    true_positive, gt_pixels, pred_pixels, _union, precision, recall, iou, dice, f1 = _compute_class_statistics(
+        confusion_matrix
+    )
 
     per_class: list[dict[str, float | int | str]] = []
     for class_id in range(confusion_matrix.shape[0]):

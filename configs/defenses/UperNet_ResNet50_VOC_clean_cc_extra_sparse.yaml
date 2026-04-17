@@ -1,0 +1,10 @@
+name: cc_extra_sparse
+family: upernet_resnet50
+threshold: 0.35
+stats_path: ../../models/defenses/cc_extra_sparse/UperNet_ResNet50_VOC_clean_cc_extra_sparse_train.pt
+strict_stats: true
+direction_mode: weight_sign
+lambda_mix: 0.5
+alpha0_mode: fixed
+beta: 0.15
+tau: 1.5

@@ -12,7 +12,52 @@ from torch.utils.data import Dataset
 def _normalize_ade20k_split(split: str) -> str:
     if split == "val":
         return "validation"
+    if split == "train":
+        return "training"
     return split
+
+
+def _candidate_ade20k_split_names(split: str) -> list[str]:
+    normalized = _normalize_ade20k_split(split)
+    candidates = [normalized]
+    if normalized == "validation":
+        candidates.append("val")
+    elif normalized == "training":
+        candidates.append("train")
+    return candidates
+
+
+def _resolve_ade20k_dataset_root(root: str | Path) -> Path:
+    root_path = Path(root)
+    base_dir = ADE20KSegmentationDataset.base_dir
+    image_dir = ADE20KSegmentationDataset.image_dir
+    mask_dir = ADE20KSegmentationDataset.mask_dir
+
+    container_candidates = [
+        root_path,
+        root_path / "ade",
+        root_path / "ADE20K",
+        root_path / "ade20k",
+    ]
+    if root_path.name == base_dir.name:
+        container_candidates.insert(0, root_path.parent)
+
+    resolved_candidates: list[Path] = []
+    seen: set[Path] = set()
+    for container in container_candidates:
+        direct_dataset_root = container
+        nested_dataset_root = container / base_dir
+        for candidate in (direct_dataset_root, nested_dataset_root):
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if (candidate / image_dir).exists() and (candidate / mask_dir).exists():
+                resolved_candidates.append(candidate)
+
+    if resolved_candidates:
+        return resolved_candidates[0]
+
+    return root_path / base_dir
 
 
 @dataclass(slots=True)
@@ -25,15 +70,26 @@ class ADE20KSample:
 
 
 def discover_ade20k_samples(root: str | Path, split: str = "validation") -> list[ADE20KSample]:
-    normalized_split = _normalize_ade20k_split(str(split))
-    dataset_root = Path(root) / ADE20KSegmentationDataset.base_dir
-    image_split_root = dataset_root / ADE20KSegmentationDataset.image_dir / normalized_split
-    mask_split_root = dataset_root / ADE20KSegmentationDataset.mask_dir / normalized_split
+    dataset_root = _resolve_ade20k_dataset_root(root)
+    image_split_root = None
+    mask_split_root = None
+    checked_pairs: list[tuple[Path, Path]] = []
+    for split_name in _candidate_ade20k_split_names(str(split)):
+        candidate_image_root = dataset_root / ADE20KSegmentationDataset.image_dir / split_name
+        candidate_mask_root = dataset_root / ADE20KSegmentationDataset.mask_dir / split_name
+        checked_pairs.append((candidate_image_root, candidate_mask_root))
+        if candidate_image_root.exists() and candidate_mask_root.exists():
+            image_split_root = candidate_image_root
+            mask_split_root = candidate_mask_root
+            break
 
-    if not image_split_root.exists():
-        raise FileNotFoundError(f"ADE20K image split directory not found: {image_split_root}")
-    if not mask_split_root.exists():
-        raise FileNotFoundError(f"ADE20K mask split directory not found: {mask_split_root}")
+    if image_split_root is None or mask_split_root is None:
+        checked_text = ", ".join(str(image_root) for image_root, _ in checked_pairs)
+        raise FileNotFoundError(
+            "ADE20K image split directory not found. "
+            f"Checked: {checked_text}. "
+            f"Resolved dataset root: {dataset_root}"
+        )
 
     samples: list[ADE20KSample] = []
     for image_path in sorted(image_split_root.rglob("*.jpg")):

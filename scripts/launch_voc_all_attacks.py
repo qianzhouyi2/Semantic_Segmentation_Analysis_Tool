@@ -19,6 +19,17 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Comma or space separated attack config stems to exclude.",
     )
+    parser.add_argument(
+        "--save-per-sample",
+        action="store_true",
+        help="Export per-sample CSV/JSONL for each clean and attack run.",
+    )
+    parser.add_argument(
+        "--per-sample-policy",
+        choices=("auto", "require", "skip"),
+        default="auto",
+        help="Worst-case aggregation policy passed to summarize_voc_all_attacks.py.",
+    )
     return parser.parse_args()
 
 
@@ -50,6 +61,7 @@ def submit_eval_case(
     dataset_root: str,
     attack_config: Path | None = None,
     batch_size: int = 4,
+    save_per_sample: bool = False,
 ) -> int:
     export_items = [
         "ALL",
@@ -67,6 +79,8 @@ def submit_eval_case(
         export_items.append(f"DEFENSE_CONFIG={model['defense_config']}")
     if attack_config is not None:
         export_items.append(f"ATTACK_CONFIG={attack_config.resolve()}")
+    if save_per_sample:
+        export_items.append("SAVE_PER_SAMPLE=1")
     return submit(
         [
             "sbatch",
@@ -96,6 +110,7 @@ def main() -> None:
                 output_dir=clean_output,
                 dataset_root=args.dataset_root,
                 batch_size=8,
+                save_per_sample=args.save_per_sample,
             )
         )
         for attack_config in attack_configs:
@@ -110,6 +125,7 @@ def main() -> None:
                     dataset_root=args.dataset_root,
                     attack_config=attack_config,
                     batch_size=batch_size,
+                    save_per_sample=args.save_per_sample,
                 )
             )
 
@@ -119,7 +135,10 @@ def main() -> None:
             "sbatch",
             f"--dependency=afterok:{dependency}",
             "--export=ALL,"
-            + f"MANIFEST={manifest_path.resolve()},SUITE_ROOT={suite_root.resolve()}",
+            + (
+                f"MANIFEST={manifest_path.resolve()},SUITE_ROOT={suite_root.resolve()},"
+                f"PER_SAMPLE_POLICY={args.per_sample_policy}"
+            ),
             "scripts/submit_voc_all_attacks_summary.sbatch",
         ]
     )
@@ -132,6 +151,8 @@ def main() -> None:
                 "suite_root": str(suite_root.resolve()),
                 "num_attacks": len(attack_configs),
                 "excluded_attack_stems": sorted(excluded_stems),
+                "save_per_sample": args.save_per_sample,
+                "per_sample_policy": args.per_sample_policy,
             },
             ensure_ascii=False,
         )

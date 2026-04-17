@@ -56,6 +56,22 @@ class ADE20KDatasetTest(unittest.TestCase):
             self.assertEqual(filename, "ADE_val_00000001.jpg")
             self.assertEqual(int(target[0, 0]), 0)
 
+    def test_discover_ade20k_samples_accepts_parent_root_with_ade_subdirectory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_dir = root / "ade" / "ADEChallengeData2016" / "images" / "validation"
+            mask_dir = root / "ade" / "ADEChallengeData2016" / "annotations" / "validation"
+            image_dir.mkdir(parents=True)
+            mask_dir.mkdir(parents=True)
+
+            Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8)).save(image_dir / "ADE_val_00000001.jpg")
+            Image.fromarray(np.zeros((8, 8), dtype=np.uint8)).save(mask_dir / "ADE_val_00000001.png")
+
+            samples = discover_ade20k_samples(root, split="validation")
+
+            self.assertEqual(len(samples), 1)
+            self.assertEqual(samples[0].sample_id, "ADE_val_00000001")
+
 
 if __name__ == "__main__":
     unittest.main()

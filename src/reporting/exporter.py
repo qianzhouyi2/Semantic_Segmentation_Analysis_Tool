@@ -19,7 +19,7 @@ def _to_builtin(value: Any) -> Any:
         return float(value)
     if isinstance(value, dict):
         return {str(key): _to_builtin(item) for key, item in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_to_builtin(item) for item in value]
     return value
 
@@ -44,6 +44,15 @@ def write_csv(path: str | Path, rows: list[dict[str, Any]]) -> Path:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows([_to_builtin(row) for row in rows])
+    return output_path
+
+
+def write_jsonl(path: str | Path, rows: list[dict[str, Any]]) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(_to_builtin(row), ensure_ascii=False) + "\n")
     return output_path
 
 

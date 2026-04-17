@@ -15,6 +15,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
+HEATMAP_SCALE_MODE_CHOICES = ("independent", "shared", "fixed")
+
+
 def normalize_perturbation(perturbation: np.ndarray) -> np.ndarray:
     """Convert a perturbation tensor/image into a displayable 0-255 map."""
     if perturbation.size == 0:
@@ -67,19 +70,95 @@ def summarize_feature_map(
     return summary.squeeze(0).squeeze(0).numpy()
 
 
-def colorize_heatmap(heatmap: np.ndarray, cmap_name: str = "magma") -> np.ndarray:
+def _resolve_single_heatmap_bounds(
+    heatmap: np.ndarray,
+    *,
+    percentile_clip_upper: float = 100.0,
+) -> tuple[float, float]:
+    data = np.asarray(heatmap, dtype=np.float32)
+    if data.size == 0:
+        return 0.0, 1.0
+
+    finite_values = data[np.isfinite(data)]
+    if finite_values.size == 0:
+        return 0.0, 1.0
+
+    min_value = float(finite_values.min())
+    max_value = float(finite_values.max())
+    clipped_percentile = float(np.clip(percentile_clip_upper, 0.0, 100.0))
+    if clipped_percentile < 100.0:
+        max_value = float(np.percentile(finite_values, clipped_percentile))
+    if max_value <= min_value:
+        max_value = min_value + 1e-6
+    return min_value, max_value
+
+
+def resolve_heatmap_display_bounds(
+    heatmaps: list[np.ndarray],
+    *,
+    scale_mode: str = "independent",
+    percentile_clip_upper: float = 100.0,
+    fixed_range: tuple[float, float] = (0.0, 1.0),
+) -> list[tuple[float, float]]:
+    if scale_mode not in HEATMAP_SCALE_MODE_CHOICES:
+        raise ValueError(f"Unsupported scale_mode `{scale_mode}`. Expected one of {HEATMAP_SCALE_MODE_CHOICES}.")
+
+    if not heatmaps:
+        return []
+
+    if scale_mode == "fixed":
+        lower, upper = fixed_range
+        if upper <= lower:
+            raise ValueError(f"Expected fixed_range with upper > lower, got {fixed_range}.")
+        return [(float(lower), float(upper)) for _ in heatmaps]
+
+    if scale_mode == "shared":
+        finite_chunks = [
+            np.asarray(heatmap, dtype=np.float32).reshape(-1)
+            for heatmap in heatmaps
+            if np.asarray(heatmap).size > 0
+        ]
+        if not finite_chunks:
+            return [(0.0, 1.0) for _ in heatmaps]
+        all_values = np.concatenate(finite_chunks, axis=0)
+        all_values = all_values[np.isfinite(all_values)]
+        if all_values.size == 0:
+            return [(0.0, 1.0) for _ in heatmaps]
+        min_value = float(all_values.min())
+        max_value = float(all_values.max())
+        clipped_percentile = float(np.clip(percentile_clip_upper, 0.0, 100.0))
+        if clipped_percentile < 100.0:
+            max_value = float(np.percentile(all_values, clipped_percentile))
+        if max_value <= min_value:
+            max_value = min_value + 1e-6
+        return [(min_value, max_value) for _ in heatmaps]
+
+    return [
+        _resolve_single_heatmap_bounds(heatmap, percentile_clip_upper=percentile_clip_upper)
+        for heatmap in heatmaps
+    ]
+
+
+def colorize_heatmap(
+    heatmap: np.ndarray,
+    cmap_name: str = "magma",
+    *,
+    vmin: float | None = None,
+    vmax: float | None = None,
+) -> np.ndarray:
     if heatmap.ndim != 2:
         raise ValueError(f"Expected heatmap with shape [H, W], got {heatmap.shape}.")
     if heatmap.size == 0:
         return np.zeros((*heatmap.shape, 3), dtype=np.uint8)
 
     data = heatmap.astype(np.float32, copy=False)
-    min_value = float(data.min())
-    max_value = float(data.max())
+    min_value = float(data.min()) if vmin is None else float(vmin)
+    max_value = float(data.max()) if vmax is None else float(vmax)
     if max_value > min_value:
         data = (data - min_value) / (max_value - min_value)
     else:
         data = np.zeros_like(data)
+    data = np.clip(data, 0.0, 1.0)
 
     colored = plt.get_cmap(cmap_name)(data)[..., :3]
     return (colored * 255.0).clip(0, 255).astype(np.uint8)
@@ -104,13 +183,16 @@ def overlay_heatmap_on_image(
     heatmap: np.ndarray,
     alpha: float = 0.45,
     cmap_name: str = "jet",
+    *,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ) -> np.ndarray:
     if image.ndim != 3 or image.shape[2] != 3:
         raise ValueError(f"Expected RGB image with shape [H, W, 3], got {image.shape}.")
     if heatmap.shape != image.shape[:2]:
         raise ValueError(f"Heatmap shape {heatmap.shape} must match image shape {image.shape[:2]}.")
 
-    colored = colorize_heatmap(heatmap, cmap_name=cmap_name).astype(np.float32)
+    colored = colorize_heatmap(heatmap, cmap_name=cmap_name, vmin=vmin, vmax=vmax).astype(np.float32)
     base = image.astype(np.float32)
     blended = (1.0 - alpha) * base + alpha * colored
     return np.clip(blended, 0, 255).astype(np.uint8)

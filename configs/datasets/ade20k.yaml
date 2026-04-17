@@ -1,6 +1,6 @@
 name: ade20k
-image_dir: datasets/ADEChallengeData2016/images/validation
-mask_dir: datasets/ADEChallengeData2016/annotations/validation
+image_dir: datasets/ade/ADEChallengeData2016/images/validation
+mask_dir: datasets/ade/ADEChallengeData2016/annotations/validation
 image_suffixes:
   - .jpg
 mask_suffixes:

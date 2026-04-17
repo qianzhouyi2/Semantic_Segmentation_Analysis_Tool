@@ -14,7 +14,7 @@ from src.common.config import load_yaml
 from src.datasets import PASCAL_VOC_CLASS_NAMES, PascalVOCValidationDataset
 from src.evaluation import evaluate_adversarial_segmentation_model
 from src.models import MODEL_FAMILY_CHOICES, TorchSegmentationModelAdapter, build_model_from_checkpoint
-from src.reporting.exporter import write_csv, write_json, write_markdown
+from src.reporting.exporter import write_csv, write_json, write_jsonl, write_markdown
 from src.robustness.visualization import save_layerwise_feature_visualizations
 
 
@@ -85,6 +85,11 @@ def parse_args() -> argparse.Namespace:
         "--feature-vis-dir",
         default="",
         help="Directory for feature visualization outputs. Defaults to <output-dir>/feature_visualizations.",
+    )
+    parser.add_argument(
+        "--save-per-sample",
+        action="store_true",
+        help="Export per-sample metrics as CSV and JSONL for downstream worst-case and paired analyses.",
     )
     parser.add_argument("--strict", dest="strict", action="store_true", help="Require exact checkpoint key match.")
     parser.add_argument("--no-strict", dest="strict", action="store_false", help="Allow missing or unexpected checkpoint keys.")
@@ -231,7 +236,14 @@ def write_single_run_outputs(
         class_names=PASCAL_VOC_CLASS_NAMES,
         max_batches=args.max_batches,
         logger=logger,
+        collect_per_sample=args.save_per_sample,
     )
+    per_sample_metrics = summary.pop("per_sample_metrics", [])
+    per_sample_csv_path = None
+    per_sample_jsonl_path = None
+    if args.save_per_sample:
+        per_sample_csv_path = write_csv(output_dir / "per_sample_metrics.csv", per_sample_metrics)
+        per_sample_jsonl_path = write_jsonl(output_dir / "per_sample_metrics.jsonl", per_sample_metrics)
     feature_visualizations: list[dict[str, object]] = []
     if args.feature_vis_samples > 0:
         feature_vis_dir = resolve_feature_vis_dir(args, output_dir, run_label=run_label)
@@ -263,6 +275,20 @@ def write_single_run_outputs(
         },
         "artifacts": {
             "feature_visualizations": feature_visualizations,
+            "per_sample_metrics_csv": None if per_sample_csv_path is None else str(per_sample_csv_path.resolve()),
+            "per_sample_metrics_jsonl": None if per_sample_jsonl_path is None else str(per_sample_jsonl_path.resolve()),
+            "per_sample_metrics_schema": (
+                None
+                if not args.save_per_sample
+                else [
+                    "sample_index",
+                    "filename",
+                    "pixel_accuracy",
+                    "sample_miou",
+                    "sample_dice",
+                    "valid_class_count",
+                ]
+            ),
         },
         **summary,
     }
@@ -299,11 +325,17 @@ def write_single_run_outputs(
             f"- targeted: {attack_config.targeted}",
             f"- processed_samples: {payload['processed_samples']}",
             f"- processed_batches: {payload['processed_batches']}",
+            f"- save_per_sample: {args.save_per_sample}",
             f"- feature_visualization_samples: {len(feature_visualizations)}",
             (
                 f"- feature_visualization_dir: {resolve_feature_vis_dir(args, output_dir, run_label=run_label).resolve()}"
                 if feature_visualizations
                 else "- feature_visualization_dir: <disabled>"
+            ),
+            (
+                f"- per_sample_metrics_csv: {per_sample_csv_path.resolve()}"
+                if per_sample_csv_path is not None
+                else "- per_sample_metrics_csv: <disabled>"
             ),
             "",
             "## Reference Metrics",

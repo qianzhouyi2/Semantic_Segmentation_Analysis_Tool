@@ -34,6 +34,7 @@ EPSILON_RADIUS_255="${EPSILON_RADIUS_255:-}"
 ATTACK_BACKWARD_MODE="${ATTACK_BACKWARD_MODE:-default}"
 NUM_RESTARTS="${NUM_RESTARTS:-1}"
 EOT_ITERS="${EOT_ITERS:-1}"
+SAVE_PER_SAMPLE="${SAVE_PER_SAMPLE:-0}"
 
 feishu_notify() {
   local text="$1"
@@ -83,6 +84,11 @@ if [[ -n "${DEFENSE_CONFIG}" ]]; then
   defense_args+=(--defense-config "${DEFENSE_CONFIG}")
 fi
 
+per_sample_args=()
+if [[ "${SAVE_PER_SAMPLE}" == "1" ]]; then
+  per_sample_args+=(--save-per-sample)
+fi
+
 if [[ "${MODE}" == "clean" ]]; then
   if [[ -f "${OUTPUT_DIR}/summary.json" ]]; then
     feishu_notify "${SLURM_JOB_ID:-nojob}:skip clean ${MODEL_ID}"
@@ -98,7 +104,8 @@ if [[ "${MODE}" == "clean" ]]; then
     --output-dir "${OUTPUT_DIR}" \
     --batch-size "${BATCH_SIZE}" \
     --num-workers "${NUM_WORKERS}" \
-    --device "${DEVICE}"
+    --device "${DEVICE}" \
+    "${per_sample_args[@]}"
 elif [[ "${MODE}" == "attack" ]]; then
   if [[ -z "${ATTACK_CONFIG}" ]]; then
     echo "ATTACK_CONFIG is required for MODE=attack" >&2
@@ -129,6 +136,7 @@ elif [[ "${MODE}" == "attack" ]]; then
     --batch-size "${BATCH_SIZE}" \
     --num-workers "${NUM_WORKERS}" \
     --device "${DEVICE}" \
+    "${per_sample_args[@]}" \
     "${attack_protocol_args[@]}"
 else
   echo "Unsupported MODE=${MODE}" >&2

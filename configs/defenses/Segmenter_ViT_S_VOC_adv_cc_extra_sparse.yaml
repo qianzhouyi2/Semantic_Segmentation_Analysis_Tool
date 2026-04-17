@@ -1,0 +1,10 @@
+name: cc_extra_sparse
+family: segmenter_vit_s
+threshold: 0.2
+stats_path: ../../models/defenses/cc_extra_sparse/Segmenter_ViT_S_VOC_adv_cc_extra_sparse_train.pt
+strict_stats: true
+direction_mode: weight_sign
+lambda_mix: 0.5
+alpha0_mode: fixed
+beta: 0.15
+tau: 1.5

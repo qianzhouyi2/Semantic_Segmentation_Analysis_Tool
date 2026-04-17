@@ -18,6 +18,7 @@ FEISHU_BRIDGE="${FEISHU_BRIDGE:-${HOME}/tools/feishu/interactive_bridge.py}"
 MANIFEST="${MANIFEST:?MANIFEST is required}"
 SUITE_ROOT="${SUITE_ROOT:?SUITE_ROOT is required}"
 EXCLUDE_ATTACK_STEMS="${EXCLUDE_ATTACK_STEMS:-}"
+PER_SAMPLE_POLICY="${PER_SAMPLE_POLICY:-auto}"
 
 feishu_notify() {
   local text="$1"
@@ -67,6 +68,7 @@ fi
 python scripts/summarize_voc_all_attacks.py \
   --manifest "${MANIFEST}" \
   --suite-root "${SUITE_ROOT}" \
+  --per-sample-policy "${PER_SAMPLE_POLICY}" \
   "${exclude_args[@]}"
 feishu_notify "${SLURM_JOB_ID:-nojob}:done all-attacks summary outputs=${SUITE_ROOT}/summary"
 status_flag="done"
