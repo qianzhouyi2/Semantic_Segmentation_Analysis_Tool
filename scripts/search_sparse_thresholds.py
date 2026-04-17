@@ -81,7 +81,13 @@ def build_dataloader(
     num_workers: int,
     device: torch.device,
 ) -> tuple[PascalVOCValidationDataset, DataLoader]:
-    dataset = PascalVOCValidationDataset(dataset_root, split=dataset_split, resize_short=473, crop_size=473)
+    dataset = PascalVOCValidationDataset(
+        dataset_root,
+        split=dataset_split,
+        resize_short=473,
+        crop_size=473,
+        remap_ignore_to_background=False,
+    )
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=batch_size,
@@ -153,7 +159,7 @@ def evaluate_threshold(
         dataloader=clean_loader,
         num_classes=num_classes,
         device=device,
-        ignore_index=None,
+        ignore_index=255,
         class_names=PASCAL_VOC_CLASS_NAMES,
         max_batches=max_batches,
         logger=logger,
@@ -171,7 +177,7 @@ def evaluate_threshold(
         model=adapter,
         attack_config=attack_config,
         dataloader=adv_loader,
-        ignore_index=None,
+        ignore_index=255,
         class_names=PASCAL_VOC_CLASS_NAMES,
         max_batches=max_batches,
         logger=logger,
@@ -311,7 +317,7 @@ def main() -> None:
                 model=adapter,
                 attack_config=attack_config,
                 dataloader=adv_loader,
-                ignore_index=None,
+                ignore_index=255,
                 class_names=PASCAL_VOC_CLASS_NAMES,
                 max_batches=args.max_batches,
                 logger=logger,

@@ -114,7 +114,7 @@ def update_confusion(confusion: np.ndarray, targets: np.ndarray, predictions: np
             target=target,
             prediction=prediction,
             num_classes=num_classes,
-            ignore_index=None,
+            ignore_index=255,
         )
 
 
@@ -189,7 +189,13 @@ def main() -> None:
         target_adapters[target["model_id"]] = adapter
         target_infos[target["model_id"]] = info
 
-    dataset = PascalVOCValidationDataset(args.dataset_root, split="val", resize_short=473, crop_size=473)
+    dataset = PascalVOCValidationDataset(
+        args.dataset_root,
+        split="val",
+        resize_short=473,
+        crop_size=473,
+        remap_ignore_to_background=False,
+    )
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=args.batch_size,

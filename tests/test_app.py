@@ -93,6 +93,22 @@ class AppConfigResolutionTest(unittest.TestCase):
         self.assertEqual(background_ids, (0,))
         self.assertEqual(present_class_ids, [0, 1, 2])
 
+    def test_discover_voc_sample_manifest_options_lists_valid_json_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / "rescued.json").write_text(
+                '{"name":"rescued","sample_ids":["2007_000001.jpg","2007_000002.png"]}',
+                encoding="utf-8",
+            )
+            (root / "invalid.json").write_text('{"sample_ids":"oops"}', encoding="utf-8")
+
+            options = app._discover_voc_sample_manifest_options(root)
+
+        self.assertEqual(options[0], ("<none>", ""))
+        self.assertEqual(len(options), 2)
+        self.assertEqual(options[1][0], "rescued (2)")
+        self.assertTrue(options[1][1].endswith("rescued.json"))
+
 
 if __name__ == "__main__":
     unittest.main()

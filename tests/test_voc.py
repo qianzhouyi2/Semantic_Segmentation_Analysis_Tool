@@ -68,6 +68,44 @@ class PascalVOCTest(unittest.TestCase):
             self.assertEqual(tuple(mask.shape), (8, 8))
             self.assertEqual(filename, "2007_000010.jpg")
 
+    def test_pascal_voc_dataset_can_preserve_ignore_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            voc_root = root / "VOCdevkit" / "VOC2012"
+            image_dir = voc_root / "JPEGImages"
+            mask_dir = voc_root / "SegmentationClass"
+            split_dir = voc_root / "ImageSets" / "Segmentation"
+            image_dir.mkdir(parents=True)
+            mask_dir.mkdir(parents=True)
+            split_dir.mkdir(parents=True)
+
+            (split_dir / "val.txt").write_text("2007_000011\n", encoding="utf-8")
+            Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8)).save(image_dir / "2007_000011.jpg")
+            mask = np.zeros((8, 8), dtype=np.uint8)
+            mask[0, 0] = 255
+            Image.fromarray(mask).save(mask_dir / "2007_000011.png")
+
+            preserved_dataset = PascalVOCValidationDataset(
+                root,
+                split="val",
+                resize_short=8,
+                crop_size=8,
+                remap_ignore_to_background=False,
+            )
+            remapped_dataset = PascalVOCValidationDataset(
+                root,
+                split="val",
+                resize_short=8,
+                crop_size=8,
+                remap_ignore_to_background=True,
+            )
+
+            _, preserved_mask, _ = preserved_dataset[0]
+            _, remapped_mask, _ = remapped_dataset[0]
+
+            self.assertEqual(int(preserved_mask[0, 0].item()), 255)
+            self.assertEqual(int(remapped_mask[0, 0].item()), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

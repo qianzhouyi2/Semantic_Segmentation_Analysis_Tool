@@ -275,6 +275,21 @@ def _load_optional_voc_sample_manifest(path_text: str):
     return load_voc_sample_id_manifest(candidate)
 
 
+def _discover_voc_sample_manifest_options(root: str | Path = "samples") -> list[tuple[str, str]]:
+    options: list[tuple[str, str]] = [("<none>", "")]
+    sample_root = Path(root)
+    if not sample_root.exists():
+        return options
+    for path in sorted(sample_root.glob("*.json")):
+        try:
+            manifest = load_voc_sample_id_manifest(path)
+        except ValueError:
+            continue
+        sample_ids = manifest.get("sample_ids", [])
+        options.append((f"{manifest.get('name', path.stem)} ({len(sample_ids)})", str(path)))
+    return options
+
+
 def _filter_pascal_voc_samples_by_manifest(samples, manifest):
     allowed_ids = manifest.get("sample_ids", [])
     filtered_ids = set(filter_voc_sample_ids([sample.sample_id for sample in samples], allowed_ids))
@@ -296,7 +311,13 @@ def _resolve_optional_repo_label_config_path(filename: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def _load_voc_validation_dataset(dataset_root: str) -> PascalVOCValidationDataset:
-    return PascalVOCValidationDataset(dataset_root, split="val", resize_short=473, crop_size=473)
+    return PascalVOCValidationDataset(
+        dataset_root,
+        split="val",
+        resize_short=473,
+        crop_size=473,
+        remap_ignore_to_background=False,
+    )
 
 
 @st.cache_resource(show_spinner=False)
@@ -502,10 +523,12 @@ def _render_pascal_voc_triplet_preview(default_label_config_path: str):
     label_config_path = _resolve_pascal_voc_label_config_path(default_label_config_path)
 
     dataset_root = st.text_input("VOC dataset root", "datasets")
-    sample_manifest_path = st.text_input(
+    sample_manifest_options = _discover_voc_sample_manifest_options()
+    sample_manifest_preset_index = st.selectbox(
         "VOC sample id JSON (optional)",
-        "",
-        help="可填写 samples/*.json，只显示该文件里的 VOC sample ids。",
+        options=range(len(sample_manifest_options)),
+        format_func=lambda index: sample_manifest_options[index][0],
+        help="从 samples/*.json 里选择一个现成样本列表。",
     )
     prediction_dir_text = st.text_input("VOC prediction directory", "")
     alpha = st.slider("Overlay alpha", min_value=0.0, max_value=1.0, value=0.45, step=0.05, key="voc_alpha")
@@ -521,8 +544,9 @@ def _render_pascal_voc_triplet_preview(default_label_config_path: str):
             st.caption(f"Suggested label config: {label_config_path}")
         return
 
+    resolved_sample_manifest_path = sample_manifest_options[sample_manifest_preset_index][1]
     try:
-        sample_manifest = _load_optional_voc_sample_manifest(sample_manifest_path)
+        sample_manifest = _load_optional_voc_sample_manifest(resolved_sample_manifest_path)
     except (FileNotFoundError, ValueError) as exc:
         st.warning(str(exc))
         return
@@ -531,7 +555,7 @@ def _render_pascal_voc_triplet_preview(default_label_config_path: str):
         samples = _filter_pascal_voc_samples_by_manifest(samples, sample_manifest)
         st.caption(
             f"Filtered by sample id JSON: {len(samples)} / {total_samples} samples "
-            f"from {sample_manifest.get('name', Path(sample_manifest_path).stem)}"
+            f"from {sample_manifest.get('name', Path(resolved_sample_manifest_path).stem)}"
         )
         if not samples:
             st.warning("No VOC samples matched the provided sample id JSON.")
@@ -686,19 +710,22 @@ def _prepare_shared_analysis_preview() -> dict[str, object] | None:
         st.caption("下面的模型、攻击和热图显示设置由三个分析 tab 共用，攻击只会运行一次。")
 
         dataset_root = st.text_input("VOC dataset root", "datasets", key="analysis_dataset_root")
-        sample_manifest_path = st.text_input(
+        sample_manifest_options = _discover_voc_sample_manifest_options()
+        sample_manifest_preset_index = st.selectbox(
             "VOC sample id JSON (optional)",
-            "",
-            key="analysis_sample_manifest_path",
-            help="可填写 samples/*.json，只在分析 tab 中显示这些 VOC sample ids。",
+            options=range(len(sample_manifest_options)),
+            format_func=lambda index: sample_manifest_options[index][0],
+            key="analysis_sample_manifest_preset_index",
+            help="从 samples/*.json 里选择一个现成样本列表。",
         )
         try:
             dataset = _load_voc_validation_dataset(dataset_root.strip())
         except (FileNotFoundError, ValueError) as exc:
             st.info(str(exc))
             return None
+        resolved_sample_manifest_path = sample_manifest_options[sample_manifest_preset_index][1]
         try:
-            sample_manifest = _load_optional_voc_sample_manifest(sample_manifest_path)
+            sample_manifest = _load_optional_voc_sample_manifest(resolved_sample_manifest_path)
         except (FileNotFoundError, ValueError) as exc:
             st.warning(str(exc))
             return None
@@ -707,7 +734,7 @@ def _prepare_shared_analysis_preview() -> dict[str, object] | None:
             dataset = _filter_voc_dataset_by_manifest(dataset, sample_manifest)
             st.caption(
                 f"Filtered analysis samples: {len(dataset.sample_ids)} / {total_samples} "
-                f"from {sample_manifest.get('name', Path(sample_manifest_path).stem)}"
+                f"from {sample_manifest.get('name', Path(resolved_sample_manifest_path).stem)}"
             )
             if not dataset.sample_ids:
                 st.warning("No VOC samples matched the provided sample id JSON.")

@@ -60,7 +60,13 @@ def main() -> None:
         Path(args.defense_config).resolve() if args.defense_config else "<none>",
     )
 
-    dataset = PascalVOCValidationDataset(args.dataset_root, split=args.dataset_split, resize_short=473, crop_size=473)
+    dataset = PascalVOCValidationDataset(
+        args.dataset_root,
+        split=args.dataset_split,
+        resize_short=473,
+        crop_size=473,
+        remap_ignore_to_background=False,
+    )
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=args.batch_size,
@@ -84,7 +90,7 @@ def main() -> None:
         dataloader=dataloader,
         num_classes=args.num_classes,
         device=device,
-        ignore_index=None,
+        ignore_index=255,
         class_names=PASCAL_VOC_CLASS_NAMES,
         max_batches=args.max_batches,
         logger=logger,

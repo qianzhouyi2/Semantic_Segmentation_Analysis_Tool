@@ -108,7 +108,13 @@ def main() -> None:
         device,
     )
 
-    dataset = PascalVOCValidationDataset(args.dataset_root, split="val", resize_short=473, crop_size=473)
+    dataset = PascalVOCValidationDataset(
+        args.dataset_root,
+        split="val",
+        resize_short=473,
+        crop_size=473,
+        remap_ignore_to_background=False,
+    )
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=args.batch_size,
@@ -170,7 +176,7 @@ def main() -> None:
                 target=target,
                 prediction=prediction,
                 num_classes=args.num_classes,
-                ignore_index=None,
+                ignore_index=255,
             )
 
         processed_batches += 1
