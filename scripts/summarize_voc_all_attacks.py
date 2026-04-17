@@ -63,6 +63,25 @@ def mean_attack_miou(row: dict, attack_stems: list[str]) -> float | None:
     return sum(values) / float(len(values))
 
 
+def build_aligned_markdown_table(rows: list[list[str]], *, right_align: set[int]) -> list[str]:
+    if not rows:
+        return []
+    widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
+
+    def format_row(row: list[str]) -> str:
+        cells = [row[index].ljust(widths[index]) for index in range(len(row))]
+        return "| " + " | ".join(cells) + " |"
+
+    def separator_cell(index: int) -> str:
+        width = max(3, widths[index])
+        if index in right_align:
+            return "-" * (width - 1) + ":"
+        return "-" * width
+
+    separator = "| " + " | ".join(separator_cell(index) for index in range(len(widths))) + " |"
+    return [format_row(rows[0]), separator, *(format_row(row) for row in rows[1:])]
+
+
 def main() -> None:
     args = parse_args()
     manifest_path = Path(args.manifest)
@@ -106,9 +125,15 @@ def main() -> None:
     write_json(output_dir / "all_attacks_summary.json", payload)
     write_csv(output_dir / "all_attacks_summary.csv", rows)
 
-    header = "| model_id | family | variant | threshold | clean | " + " | ".join(attack_stems) + " | mean |"
-    separator = "| --- | --- | --- | ---: | ---: | " + " | ".join(["---:"] * len(attack_stems)) + " | ---: |"
-    body = []
+    table_rows = [[
+        "model_id",
+        "family",
+        "variant",
+        "threshold",
+        "clean",
+        *attack_stems,
+        "mean",
+    ]]
     for row in rows:
         values = [
             f"`{row['model_id']}`",
@@ -119,7 +144,12 @@ def main() -> None:
         ]
         values.extend(format_num(row[f"{stem}_miou"]) for stem in attack_stems)
         values.append(format_num(row["mean_attack_miou"]))
-        body.append("| " + " | ".join(values) + " |")
+        table_rows.append(values)
+
+    table_lines = build_aligned_markdown_table(
+        table_rows,
+        right_align=set(range(3, len(table_rows[0]))),
+    )
 
     write_markdown(
         output_dir / "all_attacks_summary.md",
@@ -130,9 +160,7 @@ def main() -> None:
             f"- num_models: {len(rows)}",
             f"- attacks: {', '.join(attack_stems)}",
             "",
-            header,
-            separator,
-            *body,
+            *table_lines,
         ],
     )
     print(output_dir / "all_attacks_summary.json")

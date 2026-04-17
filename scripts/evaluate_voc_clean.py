@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", required=True, help="Checkpoint path.")
     parser.add_argument("--defense-config", default="", help="Optional sparse defense YAML config.")
     parser.add_argument("--dataset-root", default="datasets", help="VOC dataset root that contains VOCdevkit/.")
+    parser.add_argument("--dataset-split", default="val", help="VOC split file name under ImageSets/Segmentation.")
     parser.add_argument("--output-dir", default="", help="Directory for outputs. Defaults to results/reports/voc_clean_eval/<checkpoint_stem>.")
     parser.add_argument("--batch-size", type=int, default=8, help="Evaluation batch size.")
     parser.add_argument("--num-workers", type=int, default=4, help="DataLoader worker count.")
@@ -54,7 +55,7 @@ def main() -> None:
         Path(args.defense_config).resolve() if args.defense_config else "<none>",
     )
 
-    dataset = PascalVOCValidationDataset(args.dataset_root, split="val", resize_short=473, crop_size=473)
+    dataset = PascalVOCValidationDataset(args.dataset_root, split=args.dataset_split, resize_short=473, crop_size=473)
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=args.batch_size,
@@ -95,7 +96,7 @@ def main() -> None:
         },
         "dataset": {
             "root": str(Path(args.dataset_root).resolve()),
-            "split": "val",
+            "split": args.dataset_split,
             "resize_short": 473,
             "crop_size": 473,
             "num_samples": len(dataset),
@@ -117,6 +118,7 @@ def main() -> None:
                 else "- defense_config: <none>"
             ),
             f"- dataset_root: {Path(args.dataset_root).resolve()}",
+            f"- dataset_split: {args.dataset_split}",
             f"- processed_samples: {payload['processed_samples']}",
             f"- processed_batches: {payload['processed_batches']}",
             "",

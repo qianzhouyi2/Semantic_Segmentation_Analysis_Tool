@@ -24,6 +24,7 @@ OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
 
 DEFENSE_CONFIG="${DEFENSE_CONFIG:-}"
 DATASET_ROOT="${DATASET_ROOT:-datasets}"
+DATASET_SPLIT="${DATASET_SPLIT:-val}"
 ATTACK_CONFIG="${ATTACK_CONFIG:-}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
@@ -93,6 +94,7 @@ if [[ "${MODE}" == "clean" ]]; then
     --checkpoint "${CHECKPOINT}" \
     "${defense_args[@]}" \
     --dataset-root "${DATASET_ROOT}" \
+    --dataset-split "${DATASET_SPLIT}" \
     --output-dir "${OUTPUT_DIR}" \
     --batch-size "${BATCH_SIZE}" \
     --num-workers "${NUM_WORKERS}" \
@@ -122,6 +124,7 @@ elif [[ "${MODE}" == "attack" ]]; then
     --checkpoint "${CHECKPOINT}" \
     "${defense_args[@]}" \
     --dataset-root "${DATASET_ROOT}" \
+    --dataset-split "${DATASET_SPLIT}" \
     --output-dir "${OUTPUT_DIR}" \
     --batch-size "${BATCH_SIZE}" \
     --num-workers "${NUM_WORKERS}" \

@@ -19,6 +19,7 @@ SEARCH_ROOT="${SEARCH_ROOT:?SEARCH_ROOT is required}"
 SUITE_ROOT="${SUITE_ROOT:?SUITE_ROOT is required}"
 DATASET_ROOT="${DATASET_ROOT:-datasets}"
 EXCLUDE_ATTACK_STEMS="${EXCLUDE_ATTACK_STEMS:-}"
+SPARSE_VARIANTS="${SPARSE_VARIANTS:-meansparse,extrasparse}"
 
 feishu_notify() {
   local text="$1"
@@ -64,7 +65,8 @@ mkdir -p "${SUITE_ROOT}"
 feishu_notify "${SLURM_JOB_ID:-nojob}:start all-attacks launcher"
 python scripts/materialize_voc_attack_suite_manifest.py \
   --search-root "${SEARCH_ROOT}" \
-  --output-dir "${SUITE_ROOT}"
+  --output-dir "${SUITE_ROOT}" \
+  --variants "${SPARSE_VARIANTS}"
 
 exclude_args=()
 if [[ -n "${EXCLUDE_ATTACK_STEMS}" ]]; then
