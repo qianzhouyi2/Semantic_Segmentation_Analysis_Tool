@@ -20,6 +20,8 @@ SUITE_ROOT="${SUITE_ROOT:?SUITE_ROOT is required}"
 DATASET_ROOT="${DATASET_ROOT:-datasets}"
 EXCLUDE_ATTACK_STEMS="${EXCLUDE_ATTACK_STEMS:-}"
 SPARSE_VARIANTS="${SPARSE_VARIANTS:-meansparse,extrasparse}"
+SAVE_PER_SAMPLE="${SAVE_PER_SAMPLE:-0}"
+PER_SAMPLE_POLICY="${PER_SAMPLE_POLICY:-auto}"
 
 feishu_notify() {
   local text="$1"
@@ -73,11 +75,18 @@ if [[ -n "${EXCLUDE_ATTACK_STEMS}" ]]; then
   exclude_args+=(--exclude-attack-stems "${EXCLUDE_ATTACK_STEMS}")
 fi
 
+per_sample_args=()
+if [[ "${SAVE_PER_SAMPLE}" == "1" ]]; then
+  per_sample_args+=(--save-per-sample)
+fi
+
 python scripts/launch_voc_all_attacks.py \
   --manifest "${SUITE_ROOT}/attack_suite_manifest.json" \
   --suite-root "${SUITE_ROOT}" \
   --dataset-root "${DATASET_ROOT}" \
   --attack-config-dir "configs/attacks" \
+  --per-sample-policy "${PER_SAMPLE_POLICY}" \
+  "${per_sample_args[@]}" \
   "${exclude_args[@]}"
 
 feishu_notify "${SLURM_JOB_ID:-nojob}:done all-attacks launcher suite_root=${SUITE_ROOT}"

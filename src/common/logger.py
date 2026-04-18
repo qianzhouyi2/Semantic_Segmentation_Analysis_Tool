@@ -9,8 +9,12 @@ def setup_logger(name: str, log_path: str | Path, level: int = logging.INFO) -> 
     logger.setLevel(level)
     logger.propagate = False
 
-    if logger.handlers:
-        return logger
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:
+            pass
 
     output_path = Path(log_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

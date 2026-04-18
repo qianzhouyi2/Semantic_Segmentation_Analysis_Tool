@@ -43,6 +43,9 @@ results/reports/*
 logs/
 *.log
 
+# Local sample manifests
+samples/*.json
+
 # Local temporary scripts
 scripts/local/
 scripts/tmp_*.sbatch
